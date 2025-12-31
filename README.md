@@ -1,4 +1,4 @@
-echo "# RNS Meshtastic Gateway Tool
+# RNS Meshtastic Gateway Tool
 This tool bridges the Reticulum Network Stack (RNS) with Meshtastic hardware (LoRa).
 
 ## Features

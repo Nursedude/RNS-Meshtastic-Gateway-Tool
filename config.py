@@ -11,7 +11,7 @@ IDENTITY_FILE = 'storage/gateway_identity'
 
 # The Aspect string for this destination (think of it as a channel topic)
 # RNS addresses are generated from this.
-RNS_ASPECT = 'meshtastic.bridge'
+RNS_ASPECT = 'meshtastic_bridge'
 
 # Display name for logging
 APP_NAME = "RNS-Mesh-Gateway"

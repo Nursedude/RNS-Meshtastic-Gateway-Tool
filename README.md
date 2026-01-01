@@ -4,16 +4,43 @@
 [![License](https://img.shields.io/badge/license-MIT-orange.svg)](LICENSE)
 [![Maintenance](https://img.shields.io/badge/contributions-Aloha-ff69b4.svg)](#-contributing-with-aloha)
 
-The **Supervisor NOC** is an AI-augmented management suite designed to bridge **Reticulum Network Stack (RNS)** and **Meshtastic** mesh networks. It utilizes a **STEM-driven architecture** to provide reliable diagnostics, roadmap synchronization, and hardware optimization for high-power gateways.
+The **Supervisor NOC** is an AI-augmented management suite designed to bridge **Reticulum Network Stack (RNS)** and **Meshtastic**.
+
+---
 
 ## 🚀 Key Features
-* **🤖 AI Diagnostics (Local & Free)**
-* **🔄 Global Roadmap Sync**
-* **🛠️ Modular Architecture**
+* **🤖 AI Diagnostics:** Real-time analysis of Signal-to-Noise Ratio (SNR).
+* **🔄 Global Roadmap Sync:** Self-updating via `git_manager.py`.
+* **🛠️ Modular Architecture:** Windows 11 & Raspberry Pi support.
+
+---
+
+## 📡 Hardware Compatibility
+
+| Device | Connection | Support Status |
+| :--- | :--- | :--- |
+| **RAK4631** | USB Serial | ✅ Verified |
+| **RAK13302** | SPI / GPIO | ✅ Verified |
+| **T-Beam** | USB Serial | ✅ Verified |
+| **Heltec V3** | USB Serial | ⚠️ Beta |
+
+---
 
 ## 📦 Installation
-* **Windows:** `powershell ./install_win.ps1`
-* **Linux/Pi:** `bash ./install_pi.sh`
+
+### Option A: Windows 11
+1. `git clone https://github.com/Nursedude/RNS-Meshtastic-Gateway-Tool.git`
+2. `cd RNS-Meshtastic-Gateway-Tool`
+3. `./install_win.ps1`
+4. `python launcher.py`
+
+### Option B: Raspberry Pi
+1. `git clone https://github.com/Nursedude/RNS-Meshtastic-Gateway-Tool.git`
+2. `chmod +x install_pi.sh`
+3. `./install_pi.sh`
+4. `python3 launcher.py`
+
+---
 
 ## 🌺 Contributing with Aloha
-We welcome contributions from the community!
+We welcome contributions from the community in the spirit of Aloha!

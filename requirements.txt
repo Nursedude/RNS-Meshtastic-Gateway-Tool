@@ -1,0 +1,33 @@
+# RNS-Meshtastic Gateway Tool - Dependencies
+# MeshForge Integration
+
+# Core networking
+rns>=0.7.0
+meshtastic>=2.3.0
+
+# System utilities
+psutil>=5.9.0
+distro>=1.8.0
+
+# Configuration
+pyyaml>=6.0
+python-dotenv>=1.0.0
+
+# CLI and formatting
+rich>=13.0.0
+click>=8.0.0
+
+# Web interface (optional)
+flask>=2.3.0
+
+# TUI interface (optional)
+textual>=0.45.0
+
+# Serial communication
+pyserial>=3.5
+
+# Development dependencies (optional)
+# pytest>=7.0.0
+# pytest-cov>=4.0.0
+# black>=23.0.0
+# mypy>=1.0.0

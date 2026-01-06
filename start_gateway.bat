@@ -1,10 +1,5 @@
-@echo off
-TITLE Supervisor NOC - Reticulum/Meshtastic Gateway
+﻿@echo off
+TITLE Supervisor NOC
 COLOR 0A
-ECHO ========================================================
-ECHO    SUPERVISOR NOC | RNS MESH GATEWAY
-ECHO ========================================================
-ECHO.
-ECHO [>] Starting Gateway Engine...
-python launcher.py
+python src/ui/menu.py
 PAUSE

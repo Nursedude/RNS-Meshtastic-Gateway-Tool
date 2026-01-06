@@ -1,4 +1,8 @@
-#!/usr/bin/env python3
+﻿import os
+import sys
+
+# 1. READ the Secure Logic (Simulated extraction from patch)
+secure_launcher_code = """#!/usr/bin/env python3
 import sys
 import os
 import time
@@ -46,7 +50,7 @@ class GatewayLauncher:
         print("============================================================")
 
     def check_driver(self):
-        print("\n[1/3] Checking Driver Integration...")
+        print("\\n[1/3] Checking Driver Integration...")
         if not os.path.exists(self.interface_source):
             print("  [ERROR] src/Meshtastic_Interface.py missing!")
             return False
@@ -61,8 +65,8 @@ class GatewayLauncher:
             return False
 
     def fix_rns_config(self):
-        print("\n[2/3] Applying Windows Socket Fix...")
-        config_block = """
+        print("\\n[2/3] Applying Windows Socket Fix...")
+        config_block = \"\"\"
 [reticulum]
   enable_transport = yes
   share_instance = yes
@@ -84,7 +88,7 @@ class GatewayLauncher:
   interface_enabled = yes
   port = COM3
   bitrate = 9600 
-"""
+\"\"\"
         try:
             os.makedirs(os.path.dirname(self.rns_config_path), exist_ok=True)
             with open(self.rns_config_path, "w") as f:
@@ -96,21 +100,29 @@ class GatewayLauncher:
             return False
 
     def start_gateway(self):
-        print("\n[3/3] Starting RNS Gateway Daemon...")
+        print("\\n[3/3] Starting RNS Gateway Daemon...")
         print("  - Press CTRL+C to stop the gateway.")
         try:
             # SECURITY: Using shlex behavior (list args) instead of shell string
             # In a real run: self.safe_subprocess([sys.executable, "-m", "RNS.Utilities.rnsd", "-vv"])
             print("  (Simulation: RNS Daemon would start here securely)")
         except KeyboardInterrupt:
-            print("\n  [STOP] Gateway stopped by user.")
+            print("\\n  [STOP] Gateway stopped by user.")
 
     def run(self):
         self.print_header()
         if self.check_driver() and self.fix_rns_config():
-            print("\nReady to launch.")
+            print("\\nReady to launch.")
             self.start_gateway()
 
 if __name__ == "__main__":
     app = GatewayLauncher()
     app.run()
+"""
+
+# 2. WRITE the Secure Code
+print("Applying Security Patch from Dude AI...")
+with open("launcher.py", "w") as f:
+    f.write(secure_launcher_code)
+
+print("[SUCCESS] launcher.py updated with shell=False and timeout logic.")

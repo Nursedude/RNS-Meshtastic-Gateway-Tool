@@ -52,8 +52,8 @@ class MeshtasticInterface(Interface):
         # Mode Definition (For rnstatus display)
         try:
             self.mode = RNS.Interfaces.Interface.MODE_ACCESS_POINT
-        except:
-            self.mode = 1 
+        except (AttributeError, KeyError):
+            self.mode = 1
 
         # --- HARDWARE CONFIGURATION ---
         try:
@@ -123,7 +123,7 @@ class MeshtasticInterface(Interface):
         if self.interface:
             try:
                 self.interface.close()
-            except:
+            except Exception:
                 pass
         self.detached = True
         self.online = False

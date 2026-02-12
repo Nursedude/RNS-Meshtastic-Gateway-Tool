@@ -1,69 +1,214 @@
-﻿from flask import Flask, render_template_string, jsonify
+"""
+Terminal Dashboard for Supervisor NOC.
+
+Displays a snapshot of gateway status, system info, and config
+directly in the terminal.  No external dependencies (no Flask, no curses).
+Invoked from the Command Center menu (option 'd').
+"""
 import json
 import os
+import platform
+import shutil
 import sys
+import time
 
-# Add root to path so we can see RNS
-sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
-
-app = Flask(__name__)
-
-# Locate config relative to this script
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 CONFIG_PATH = os.path.join(BASE_DIR, 'config.json')
+RNS_CONFIG_DIR = os.path.join(os.path.expanduser("~"), ".reticulum")
 
-with open(CONFIG_PATH, 'r') as f:
-    config = json.load(f)
 
-HTML = """
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <title>Supervisor NOC | Deep Dive</title>
-    <style>
-        body { background-color: #0d1117; color: #c9d1d9; font-family: 'Segoe UI', monospace; padding: 20px; }
-        .header { border-bottom: 2px solid #238636; padding-bottom: 10px; margin-bottom: 20px; }
-        .card { background: #161b22; border: 1px solid #30363d; border-radius: 6px; padding: 20px; margin-bottom: 20px; }
-        h1 { color: #238636; }
-        h3 { margin-top: 0; color: #58a6ff; }
-        .stat { font-size: 24px; font-weight: bold; }
-        .status-ok { color: #3fb950; }
-        .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; }
-    </style>
-    <script>
-        setTimeout(function(){ location.reload(); }, 5000);
-    </script>
-</head>
-<body>
-    <div class="header">
-        <h1>Supervisor NOC // Deep Dive</h1>
-        <span>Gateway Node: <strong>{{ node_name }}</strong></span>
-    </div>
-    <div class="grid">
-        <div class="card">
-            <h3>Interface Status</h3>
-            <div class="stat status-ok">ONLINE</div>
-            <p>Port: {{ port }}</p>
-            <p>Bitrate: {{ bitrate }} bps</p>
-        </div>
-        <div class="card">
-            <h3>Configuration</h3>
-            <pre>{{ config_dump }}</pre>
-        </div>
-    </div>
-</body>
-</html>
-"""
+# ── ANSI helpers ─────────────────────────────────────────────
+class C:
+    RST  = '\033[0m'
+    BOLD = '\033[1m'
+    DIM  = '\033[2m'
+    RED  = '\033[91m'
+    GRN  = '\033[92m'
+    YLW  = '\033[93m'
+    BLU  = '\033[94m'
+    CYN  = '\033[96m'
+    WHT  = '\033[97m'
 
-@app.route('/')
-def home():
-    return render_template_string(HTML, 
-                                  node_name=config['gateway']['name'],
-                                  port=config['gateway']['port'],
-                                  bitrate=config['gateway']['bitrate'],
-                                  config_dump=json.dumps(config['features'], indent=2))
+BOX_H  = '─'
+BOX_V  = '│'
+BOX_TL = '┌'
+BOX_TR = '┐'
+BOX_BL = '└'
+BOX_BR = '┘'
+BOX_LT = '├'
+BOX_RT = '┤'
+
+
+def _cols():
+    return shutil.get_terminal_size((80, 24)).columns
+
+
+def _strip_ansi(text):
+    import re
+    return re.sub(r'\033\[[0-9;]*m', '', text)
+
+
+def box_top(w):
+    return f"  {C.DIM}{BOX_TL}{BOX_H * (w - 2)}{BOX_TR}{C.RST}"
+
+def box_mid(w):
+    return f"  {C.DIM}{BOX_LT}{BOX_H * (w - 2)}{BOX_RT}{C.RST}"
+
+def box_bot(w):
+    return f"  {C.DIM}{BOX_BL}{BOX_H * (w - 2)}{BOX_BR}{C.RST}"
+
+def box_row(content, w):
+    visible = len(_strip_ansi(content))
+    inner = w - 4
+    pad = max(0, inner - visible)
+    return f"  {C.DIM}{BOX_V}{C.RST} {content}{' ' * pad} {C.DIM}{BOX_V}{C.RST}"
+
+def box_section(label, w):
+    inner = w - 4
+    lbl = f" {label} "
+    bar_len = max(0, inner - len(lbl))
+    left = bar_len // 2
+    right = bar_len - left
+    return f"  {C.DIM}{BOX_LT}{BOX_H * left}{C.RST}{C.BOLD}{C.CYN}{lbl}{C.RST}{C.DIM}{BOX_H * right}{BOX_RT}{C.RST}"
+
+def box_kv(key, value, w, key_color=C.CYN, val_color=C.WHT):
+    """Key-value row inside a box."""
+    return box_row(f"{key_color}{key}:{C.RST}  {val_color}{value}{C.RST}", w)
+
+
+# ── Data Collection ──────────────────────────────────────────
+def load_config():
+    try:
+        with open(CONFIG_PATH, 'r') as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError, PermissionError):
+        return None
+
+
+def check_rns_config():
+    """Check if Reticulum config directory exists and has a config file."""
+    config_file = os.path.join(RNS_CONFIG_DIR, "config")
+    if os.path.isfile(config_file):
+        size = os.path.getsize(config_file)
+        return True, f"{size} bytes"
+    return False, "not found"
+
+
+def check_serial_ports():
+    """List serial ports if pyserial is available."""
+    try:
+        from serial.tools.list_ports import comports
+        ports = [p.device for p in comports()]
+        return ports if ports else ["(none detected)"]
+    except ImportError:
+        return ["(pyserial not installed)"]
+
+
+def check_meshtastic_lib():
+    """Check whether meshtastic python lib is importable."""
+    try:
+        import meshtastic
+        return True, getattr(meshtastic, '__version__', 'unknown')
+    except ImportError:
+        return False, "not installed"
+
+
+def check_rns_lib():
+    """Check whether RNS is importable."""
+    try:
+        import RNS
+        return True, getattr(RNS, '__version__', 'unknown')
+    except ImportError:
+        return False, "not installed"
+
+
+# ── Render ───────────────────────────────────────────────────
+def render_dashboard():
+    sys.stdout.write('\033[2J\033[H')
+    sys.stdout.flush()
+
+    w = min(_cols() - 4, 66)
+    cfg = load_config()
+
+    # Title
+    print()
+    print(box_top(w))
+    title = f"{C.BOLD}{C.GRN}SUPERVISOR NOC{C.RST}  {C.DIM}Terminal Dashboard{C.RST}"
+    visible_title = len(_strip_ansi(title))
+    inner = w - 4
+    lpad = (inner - visible_title) // 2
+    rpad = inner - visible_title - lpad
+    print(f"  {C.DIM}{BOX_V}{C.RST} {' ' * lpad}{title}{' ' * rpad} {C.DIM}{BOX_V}{C.RST}")
+    print(box_bot(w))
+    print()
+
+    # ── System Panel ──
+    print(box_top(w))
+    print(box_section("SYSTEM", w))
+    print(box_kv("Platform", f"{platform.system()} {platform.release()}", w))
+    print(box_kv("Python", f"{platform.python_version()} ({sys.executable})", w))
+    print(box_kv("Hostname", platform.node(), w))
+    print(box_bot(w))
+    print()
+
+    # ── Libraries Panel ──
+    rns_ok, rns_ver = check_rns_lib()
+    mesh_ok, mesh_ver = check_meshtastic_lib()
+    print(box_top(w))
+    print(box_section("LIBRARIES", w))
+
+    rns_status = f"{C.GRN}OK{C.RST}  v{rns_ver}" if rns_ok else f"{C.RED}MISSING{C.RST}"
+    mesh_status = f"{C.GRN}OK{C.RST}  v{mesh_ver}" if mesh_ok else f"{C.RED}MISSING{C.RST}"
+    print(box_kv("Reticulum", rns_status, w))
+    print(box_kv("Meshtastic", mesh_status, w))
+
+    # Serial ports
+    ports = check_serial_ports()
+    print(box_kv("Serial Ports", ", ".join(ports), w))
+    print(box_bot(w))
+    print()
+
+    # ── RNS Config Panel ──
+    rns_found, rns_info = check_rns_config()
+    print(box_top(w))
+    print(box_section("RETICULUM", w))
+    if rns_found:
+        print(box_kv("Config", f"{C.GRN}found{C.RST}  ({rns_info})", w))
+    else:
+        print(box_kv("Config", f"{C.RED}not found{C.RST}  (run RNS once to create)", w))
+    print(box_kv("Config Dir", RNS_CONFIG_DIR, w))
+    print(box_bot(w))
+    print()
+
+    # ── Gateway Config Panel ──
+    print(box_top(w))
+    print(box_section("GATEWAY CONFIG", w))
+    if cfg:
+        gw = cfg.get('gateway', {})
+        dash = cfg.get('dashboard', {})
+        print(box_kv("Node Name", gw.get('name', '(unset)'), w))
+        print(box_kv("Radio Port", gw.get('port', '(unset)'), w))
+        print(box_kv("Bitrate", f"{gw.get('bitrate', '?')} bps", w))
+        print(box_kv("Dash Host", f"{dash.get('host', '?')}:{dash.get('port', '?')}", w))
+        features = cfg.get('features', {})
+        if features:
+            print(box_mid(w))
+            print(box_row(f"{C.DIM}Features:{C.RST}", w))
+            for k, v in features.items():
+                tag = f"{C.GRN}ON{C.RST}" if v else f"{C.RED}OFF{C.RST}"
+                print(box_row(f"  {k}: {tag}", w))
+    else:
+        print(box_row(f"{C.YLW}config.json not found or invalid{C.RST}", w))
+        print(box_row(f"{C.DIM}Expected at: {CONFIG_PATH}{C.RST}", w))
+    print(box_bot(w))
+    print()
+
+
+# ── Entry Point ──────────────────────────────────────────────
+def main():
+    render_dashboard()
+    # No auto-loop; single snapshot, then return to menu
+
 
 if __name__ == '__main__':
-    print(f"Starting Dashboard on port {config['dashboard']['port']}")
-    app.run(host=config['dashboard']['host'], port=config['dashboard']['port'])
+    main()

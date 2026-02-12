@@ -6,6 +6,11 @@ import shutil
 import subprocess
 import webbrowser
 
+from src.ui.widgets import (
+    C, cols, center,
+    box_top, box_mid, box_bot, box_row, box_section,
+)
+
 # Path Setup
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 CONFIG_PATH = os.path.join(BASE_DIR, 'config.json')
@@ -23,78 +28,6 @@ def load_config():
             "gateway": {"name": "Supervisor NOC", "port": "COM3"},
             "dashboard": {"port": 5000},
         }
-
-
-# ── ANSI Styling ─────────────────────────────────────────────
-class C:
-    """Terminal color codes."""
-    RST  = '\033[0m'
-    BOLD = '\033[1m'
-    DIM  = '\033[2m'
-    # Foreground
-    RED  = '\033[91m'
-    GRN  = '\033[92m'
-    YLW  = '\033[93m'
-    BLU  = '\033[94m'
-    MAG  = '\033[95m'
-    CYN  = '\033[96m'
-    WHT  = '\033[97m'
-    # Background accents
-    BG_GRN = '\033[42m'
-    BG_RED = '\033[41m'
-
-
-def _cols():
-    """Return terminal width, with a sane fallback."""
-    return shutil.get_terminal_size((80, 24)).columns
-
-
-def _center(text, width, fill=' '):
-    """Center-pad text within width (ignoring ANSI codes for length calc)."""
-    import re
-    visible = len(re.sub(r'\033\[[0-9;]*m', '', text))
-    pad = max(0, width - visible)
-    left = pad // 2
-    right = pad - left
-    return fill * left + text + fill * right
-
-
-# ── Box Drawing ──────────────────────────────────────────────
-BOX_H  = '─'
-BOX_V  = '│'
-BOX_TL = '┌'
-BOX_TR = '┐'
-BOX_BL = '└'
-BOX_BR = '┘'
-BOX_LT = '├'
-BOX_RT = '┤'
-
-
-def box_top(w):
-    return f"  {C.DIM}{BOX_TL}{BOX_H * (w - 2)}{BOX_TR}{C.RST}"
-
-def box_mid(w):
-    return f"  {C.DIM}{BOX_LT}{BOX_H * (w - 2)}{BOX_RT}{C.RST}"
-
-def box_bot(w):
-    return f"  {C.DIM}{BOX_BL}{BOX_H * (w - 2)}{BOX_BR}{C.RST}"
-
-def box_row(content, w):
-    """Wrap content in box side-bars, padded to width w."""
-    import re
-    visible = len(re.sub(r'\033\[[0-9;]*m', '', content))
-    inner = w - 4  # account for "│ " and " │"
-    pad = max(0, inner - visible)
-    return f"  {C.DIM}{BOX_V}{C.RST} {content}{' ' * pad} {C.DIM}{BOX_V}{C.RST}"
-
-def box_section(label, w):
-    """Section divider with embedded label."""
-    inner = w - 4
-    lbl = f" {label} "
-    bar_len = max(0, inner - len(lbl))
-    left = bar_len // 2
-    right = bar_len - left
-    return f"  {C.DIM}{BOX_LT}{BOX_H * left}{C.RST}{C.BOLD}{C.CYN}{lbl}{C.RST}{C.DIM}{BOX_H * right}{BOX_RT}{C.RST}"
 
 
 # ── Cross-Platform Helpers ───────────────────────────────────
@@ -182,7 +115,7 @@ def run_tool(cmd_list, cwd=None):
 # ── Banner & Menu Rendering ──────────────────────────────────
 def print_banner(cfg):
     clear_screen()
-    w = min(_cols() - 4, 62)  # cap box width
+    w = min(cols() - 4, 62)  # cap box width
     port = cfg.get('gateway', {}).get('port', '???')
     dash = cfg.get('dashboard', {}).get('port', '???')
     name = cfg.get('gateway', {}).get('name', 'Supervisor NOC')
@@ -190,11 +123,11 @@ def print_banner(cfg):
     print()
     print(box_top(w))
     print(box_row(
-        _center(f"{C.BOLD}{C.GRN}SUPERVISOR NOC{C.RST}  {C.DIM}Command Center v{VERSION}{C.RST}", w - 4),
+        center(f"{C.BOLD}{C.GRN}SUPERVISOR NOC{C.RST}  {C.DIM}Command Center v{VERSION}{C.RST}", w - 4),
         w,
     ))
     print(box_row(
-        _center(f"{C.DIM}Node: {name}{C.RST}", w - 4),
+        center(f"{C.DIM}Node: {name}{C.RST}", w - 4),
         w,
     ))
     print(box_mid(w))
@@ -208,7 +141,7 @@ def print_banner(cfg):
 
 
 def print_menu():
-    w = min(_cols() - 4, 62)
+    w = min(cols() - 4, 62)
 
     print(box_top(w))
     print(box_section("LAUNCHERS", w))

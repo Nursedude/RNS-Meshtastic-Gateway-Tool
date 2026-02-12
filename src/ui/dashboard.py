@@ -8,72 +8,17 @@ Invoked from the Command Center menu (option 'd').
 import json
 import os
 import platform
-import shutil
 import sys
 import time
+
+from src.ui.widgets import (
+    C, BOX_V, cols, strip_ansi,
+    box_top, box_mid, box_bot, box_row, box_section, box_kv,
+)
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 CONFIG_PATH = os.path.join(BASE_DIR, 'config.json')
 RNS_CONFIG_DIR = os.path.join(os.path.expanduser("~"), ".reticulum")
-
-
-# ── ANSI helpers ─────────────────────────────────────────────
-class C:
-    RST  = '\033[0m'
-    BOLD = '\033[1m'
-    DIM  = '\033[2m'
-    RED  = '\033[91m'
-    GRN  = '\033[92m'
-    YLW  = '\033[93m'
-    BLU  = '\033[94m'
-    CYN  = '\033[96m'
-    WHT  = '\033[97m'
-
-BOX_H  = '─'
-BOX_V  = '│'
-BOX_TL = '┌'
-BOX_TR = '┐'
-BOX_BL = '└'
-BOX_BR = '┘'
-BOX_LT = '├'
-BOX_RT = '┤'
-
-
-def _cols():
-    return shutil.get_terminal_size((80, 24)).columns
-
-
-def _strip_ansi(text):
-    import re
-    return re.sub(r'\033\[[0-9;]*m', '', text)
-
-
-def box_top(w):
-    return f"  {C.DIM}{BOX_TL}{BOX_H * (w - 2)}{BOX_TR}{C.RST}"
-
-def box_mid(w):
-    return f"  {C.DIM}{BOX_LT}{BOX_H * (w - 2)}{BOX_RT}{C.RST}"
-
-def box_bot(w):
-    return f"  {C.DIM}{BOX_BL}{BOX_H * (w - 2)}{BOX_BR}{C.RST}"
-
-def box_row(content, w):
-    visible = len(_strip_ansi(content))
-    inner = w - 4
-    pad = max(0, inner - visible)
-    return f"  {C.DIM}{BOX_V}{C.RST} {content}{' ' * pad} {C.DIM}{BOX_V}{C.RST}"
-
-def box_section(label, w):
-    inner = w - 4
-    lbl = f" {label} "
-    bar_len = max(0, inner - len(lbl))
-    left = bar_len // 2
-    right = bar_len - left
-    return f"  {C.DIM}{BOX_LT}{BOX_H * left}{C.RST}{C.BOLD}{C.CYN}{lbl}{C.RST}{C.DIM}{BOX_H * right}{BOX_RT}{C.RST}"
-
-def box_kv(key, value, w, key_color=C.CYN, val_color=C.WHT):
-    """Key-value row inside a box."""
-    return box_row(f"{key_color}{key}:{C.RST}  {val_color}{value}{C.RST}", w)
 
 
 # ── Data Collection ──────────────────────────────────────────
@@ -127,14 +72,14 @@ def render_dashboard():
     sys.stdout.write('\033[2J\033[H')
     sys.stdout.flush()
 
-    w = min(_cols() - 4, 66)
+    w = min(cols() - 4, 66)
     cfg = load_config()
 
     # Title
     print()
     print(box_top(w))
     title = f"{C.BOLD}{C.GRN}SUPERVISOR NOC{C.RST}  {C.DIM}Terminal Dashboard{C.RST}"
-    visible_title = len(_strip_ansi(title))
+    visible_title = len(strip_ansi(title))
     inner = w - 4
     lpad = (inner - visible_title) // 2
     rpad = inner - visible_title - lpad

@@ -30,7 +30,7 @@ The driver supports two connection modes, configured via `connection_type` in `c
 * Default: `localhost:4403`
 * **Single-client limitation:** meshtasticd's TCP port allows only ONE client at a time. The firmware enforces this — competing apps (CLI, web client, scripts) cause connection refusals.
 * Use TCP mode when the radio is connected to a remote host running meshtasticd
-* Future phases may add HTTP protobuf transport and MQTT bridge to avoid TCP contention (see SESSION_NOTES)
+* For HTTP protobuf transport (`/api/v1/toradio` on port 9443) or MQTT bridge mode, see **MeshForge** — those features require its full gateway ecosystem
 
 ### Config Example
 ```json
@@ -44,6 +44,27 @@ The driver supports two connection modes, configured via `connection_type` in `c
 }
 ```
 
-## 4. Architecture Principles (Meshforge Aligned)
-* **Separation of Concerns:** The Driver (`src/`) handles hardware bytes. The Launcher handles RNS logic.
+## 4. Auto-Reconnect
+The gateway automatically reconnects on connection loss using exponential backoff with jitter (inspired by MeshForge's `ReconnectStrategy`):
+* **Initial delay:** 2s, doubles each attempt up to 60s max
+* **Jitter:** 15% to prevent thundering herd
+* **Max attempts:** 10 per cycle, then resets and tries again
+* **Health check:** Every 30s, verifies the interface is still alive
+
+## 5. Architecture Principles (Meshforge Aligned)
+* **Separation of Concerns:** The Driver (`src/`) handles hardware bytes. The Launcher handles RNS logic and reconnection.
 * **Resilience:** The driver creates a "Kitchen Sink" of attributes to satisfy RNS, even if not all are used, to prevent runtime crashes.
+
+## 6. Feature Boundaries: This Tool vs MeshForge
+This tool is a **lightweight RNS-to-Meshtastic bridge**. For advanced gateway features, use [MeshForge](https://github.com/Nursedude/MeshForge):
+
+| Feature | This Tool | MeshForge |
+|---------|-----------|-----------|
+| Serial/USB connection | Yes | Yes |
+| TCP (meshtasticd) | Yes | Yes |
+| Auto-reconnect | Yes (backoff) | Yes (backoff + circuit breaker) |
+| HTTP protobuf TX | No | Yes (`/api/v1/toradio`) |
+| MQTT bridge RX | No | Yes (paho-mqtt) |
+| Node tracking | No | Yes (unified tracker) |
+| Message routing | Broadcast only | Per-node routing |
+| Web dashboard | Basic (Flask) | Full (WebSocket + metrics) |

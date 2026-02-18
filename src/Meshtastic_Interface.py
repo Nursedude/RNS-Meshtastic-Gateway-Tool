@@ -1,5 +1,6 @@
 import RNS
 import os
+import random
 import sys
 import time
 import collections
@@ -184,6 +185,35 @@ class MeshtasticInterface(Interface):
 
     def process_outgoing(self, data):
         self.process_incoming(data)
+
+    def reconnect(self):
+        """
+        Attempt to reconnect after a connection loss.
+        Closes existing interface cleanly, then re-initializes.
+        """
+        print(f"[{self.name}] Attempting reconnect...")
+
+        # Close existing connection
+        if self.interface:
+            try:
+                self.interface.close()
+            except Exception:
+                pass
+            self.interface = None
+
+        self.online = False
+        self.OUT = False
+
+        # Re-initialize based on connection type
+        config = {}
+        if self.connection_type == "tcp":
+            config = {"host": self.host, "tcp_port": self.tcp_port, "connection_type": "tcp"}
+            self._init_tcp(self.owner, self.name, config)
+        else:
+            config = {"port": self.port, "connection_type": "serial"}
+            self._init_serial(self.owner, self.name, config)
+
+        return self.online
 
     def detach(self):
         """

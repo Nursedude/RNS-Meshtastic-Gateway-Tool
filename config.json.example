@@ -1,7 +1,10 @@
 {
     "gateway": {
         "name": "Supervisor NOC",
+        "connection_type": "serial",
         "port": "COM3",
+        "host": "localhost",
+        "tcp_port": 4403,
         "bitrate": 500
     },
     "dashboard": {

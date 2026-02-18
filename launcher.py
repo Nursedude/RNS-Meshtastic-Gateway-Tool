@@ -1,10 +1,16 @@
 import RNS
+import json
 import os
+import random
 import sys
 import time
 
-# Add src folder to path so we can import the driver
-sys.path.insert(0, os.path.join(os.getcwd(), 'src'))
+# Add project root and src folder to path
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, BASE_DIR)
+sys.path.insert(0, os.path.join(BASE_DIR, 'src'))
+
+from version import __version__
 
 # Import the custom driver
 try:
@@ -14,41 +20,98 @@ except ImportError as e:
     print(f"Error: {e}")
     sys.exit(1)
 
+CONFIG_PATH = os.path.join(BASE_DIR, 'config.json')
+
+# Reconnect settings (inspired by MeshForge ReconnectStrategy)
+RECONNECT_INITIAL_DELAY = 2.0   # seconds
+RECONNECT_MAX_DELAY = 60.0      # seconds
+RECONNECT_MULTIPLIER = 2.0
+RECONNECT_JITTER = 0.15         # 15% jitter to prevent thundering herd
+RECONNECT_MAX_ATTEMPTS = 10
+HEALTH_CHECK_INTERVAL = 30      # seconds between connection health checks
+
+
+def load_config():
+    """Load gateway config.json, returning empty dict on failure."""
+    try:
+        with open(CONFIG_PATH, 'r') as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError, PermissionError) as e:
+        print(f"[WARN] Could not load {CONFIG_PATH}: {e}")
+        print("[WARN] Using default settings.")
+        return {}
+
+
+def _backoff_delay(attempt):
+    """Calculate reconnect delay with exponential backoff + jitter."""
+    base = min(RECONNECT_INITIAL_DELAY * (RECONNECT_MULTIPLIER ** attempt), RECONNECT_MAX_DELAY)
+    jitter = base * RECONNECT_JITTER
+    return base + random.uniform(-jitter, jitter)
+
+
 def start_gateway():
     print("============================================================")
-    print("  SUPERVISOR NOC | RNS-MESHTASTIC GATEWAY v2.4")
+    print(f"  SUPERVISOR NOC | RNS-MESHTASTIC GATEWAY v{__version__}")
     print("============================================================")
 
+    cfg = load_config()
+    gw_config = cfg.get("gateway", {})
+
     # 1. Initialize Reticulum
-    # This automatically loads the default config from ~/.reticulum
     rns_connection = RNS.Reticulum()
 
     print("\n[GO] Loading Interface 'Meshtastic Radio'...")
-    
+
     # 2. Instantiate the Driver
-    # We pass the RNS instance (owner) and a name.
-    # The driver handles the hardware connection internally.
-    mesh_interface = MeshtasticInterface(rns_connection, "Meshtastic Radio")
-    
-    # 3. Register the Interface with Reticulum
-    # This tells RNS to start routing traffic through our driver.
-    # Note: Modern RNS automatically picks up interfaces if added to config,
-    # but for a custom standalone script, we might need to hold the reference.
-    
-    if mesh_interface.online:
-        print(" [SUCCESS] Interface Loaded! Waiting for traffic...")
-        
-        # Keep the main thread alive
-        try:
-            while True:
+    mesh_interface = MeshtasticInterface(rns_connection, "Meshtastic Radio", config=gw_config)
+
+    if not mesh_interface.online:
+        print(" [FAIL] Initial connection failed. Will retry...")
+
+    # 3. Main loop with health check and auto-reconnect
+    reconnect_attempts = 0
+    last_health_check = time.time()
+
+    try:
+        while True:
+            now = time.time()
+
+            if mesh_interface.online:
+                # Connection is healthy — reset attempt counter
+                reconnect_attempts = 0
+
+                # Periodic health check: verify the interface is still responsive
+                if now - last_health_check >= HEALTH_CHECK_INTERVAL:
+                    last_health_check = now
+                    if mesh_interface.interface is None:
+                        print(f"[{mesh_interface.name}] Health check: interface lost")
+                        mesh_interface.online = False
+
                 time.sleep(1)
-        except KeyboardInterrupt:
-            print("\n[STOP] Shutting down gateway...")
-            mesh_interface.detach()
-            sys.exit(0)
-    else:
-        print(" [FAIL] Interface failed to initialize.")
-        sys.exit(1)
+            else:
+                # Connection is down — attempt reconnect with backoff
+                if reconnect_attempts >= RECONNECT_MAX_ATTEMPTS:
+                    print(f"[WARN] {RECONNECT_MAX_ATTEMPTS} reconnect attempts exhausted. Resetting...")
+                    reconnect_attempts = 0
+                    time.sleep(RECONNECT_MAX_DELAY)
+                    continue
+
+                delay = _backoff_delay(reconnect_attempts)
+                reconnect_attempts += 1
+                print(f"[RECONNECT] Attempt {reconnect_attempts}/{RECONNECT_MAX_ATTEMPTS} "
+                      f"in {delay:.1f}s...")
+                time.sleep(delay)
+
+                if mesh_interface.reconnect():
+                    print(f" [SUCCESS] Reconnected after {reconnect_attempts} attempt(s)!")
+                    reconnect_attempts = 0
+                else:
+                    print(f" [FAIL] Reconnect attempt {reconnect_attempts} failed.")
+
+    except KeyboardInterrupt:
+        print("\n[STOP] Shutting down gateway...")
+        mesh_interface.detach()
+        sys.exit(0)
 
 if __name__ == "__main__":
     start_gateway()

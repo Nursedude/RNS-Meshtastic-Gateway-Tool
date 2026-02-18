@@ -131,8 +131,13 @@ def render_dashboard():
     if cfg:
         gw = cfg.get('gateway', {})
         dash = cfg.get('dashboard', {})
+        conn_type = gw.get('connection_type', 'serial')
         print(box_kv("Node Name", gw.get('name', '(unset)'), w))
-        print(box_kv("Radio Port", gw.get('port', '(unset)'), w))
+        print(box_kv("Connection", conn_type, w))
+        if conn_type == "tcp":
+            print(box_kv("TCP Host", f"{gw.get('host', 'localhost')}:{gw.get('tcp_port', 4403)}", w))
+        else:
+            print(box_kv("Radio Port", gw.get('port', '(unset)'), w))
         print(box_kv("Bitrate", f"{gw.get('bitrate', '?')} bps", w))
         print(box_kv("Dash Host", f"{dash.get('host', '?')}:{dash.get('port', '?')}", w))
         features = cfg.get('features', {})

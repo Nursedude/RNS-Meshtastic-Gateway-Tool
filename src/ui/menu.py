@@ -6,17 +6,21 @@ import shutil
 import subprocess
 import webbrowser
 
+# Ensure project root is on path for version import
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+if BASE_DIR not in sys.path:
+    sys.path.insert(0, BASE_DIR)
+
+from version import __version__ as VERSION
 from src.ui.widgets import (
     C, cols, center,
     box_top, box_mid, box_bot, box_row, box_section,
 )
 
 # Path Setup
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 CONFIG_PATH = os.path.join(BASE_DIR, 'config.json')
 RNS_CONFIG = os.path.join(os.path.expanduser("~"), ".reticulum", "config")
 NOMAD_CONFIG = os.path.join(os.path.expanduser("~"), ".nomadnet", "config")
-VERSION = "4.1"
 
 
 def load_config():
@@ -208,6 +212,9 @@ def main_menu():
         elif choice == '0':
             print(f"\n  {C.DIM}Goodbye.{C.RST}\n")
             sys.exit(0)
+        elif choice:
+            print(f"\n  {C.YLW}  Unknown option: '{choice}'{C.RST}")
+            time.sleep(1)
 
 
 if __name__ == "__main__":

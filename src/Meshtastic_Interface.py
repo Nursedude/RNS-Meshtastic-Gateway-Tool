@@ -20,6 +20,15 @@ try:
 except ImportError:
     HAS_MESH_LIB = False
 
+# [TCP INTERFACE CHECK]
+HAS_TCP_LIB = False
+if HAS_MESH_LIB:
+    try:
+        import meshtastic.tcp_interface
+        HAS_TCP_LIB = True
+    except ImportError:
+        pass
+
 
 def _default_serial_port():
     """Return a platform-appropriate default serial port, with auto-detection."""
@@ -38,7 +47,8 @@ def _default_serial_port():
 class MeshtasticInterface(Interface):
     """
     RNS Interface Driver for Meshtastic LoRa Radios.
-    Bridges Reticulum packets over the Meshtastic Python API via Serial/USB.
+    Bridges Reticulum packets over the Meshtastic Python API.
+    Supports serial/USB and TCP (meshtasticd) connections.
     """
 
     def __init__(self, owner, name, config=None):
@@ -70,11 +80,23 @@ class MeshtasticInterface(Interface):
         except (AttributeError, KeyError):
             self.mode = 1
 
+        # --- CONNECTION MODE ---
+        self.connection_type = "serial"
+        if config and config.get("connection_type"):
+            self.connection_type = config["connection_type"]
+
         # --- HARDWARE CONFIGURATION ---
-        # Priority: explicit config dict > RNS owner config > platform default
-        self.port = None
-        if config and config.get("port"):
-            self.port = config["port"]
+        self.interface = None
+
+        if self.connection_type == "tcp":
+            self._init_tcp(owner, name, config or {})
+        else:
+            self._init_serial(owner, name, config or {})
+
+    def _init_serial(self, owner, name, config):
+        """Initialize via serial/USB connection."""
+        # Priority: explicit config > RNS owner config > platform default
+        self.port = config.get("port")
 
         if not self.port:
             try:
@@ -86,24 +108,49 @@ class MeshtasticInterface(Interface):
         if not self.port:
             self.port = _default_serial_port()
 
-        print(f"[{self.name}] Initializing on {self.port}...")
+        print(f"[{self.name}] Initializing serial on {self.port}...")
 
-        # --- HARDWARE CONNECTION ---
-        self.interface = None
-        if HAS_MESH_LIB:
-            try:
-                self.interface = meshtastic.serial_interface.SerialInterface(self.port)
-                # Subscribe to incoming Mesh packets
-                meshtastic.pub.subscribe(self.on_receive, "meshtastic.receive.data")
-                self.online = True
-                self.OUT = True
-                print(f"[{self.name}] Hardware Connected Successfully.")
-            except Exception as e:
-                print(f"[{self.name}] Hardware Error: {e}")
-                self.online = False
-        else:
+        if not HAS_MESH_LIB:
             print(f"[{self.name}] CRITICAL: 'meshtastic' python library not found!")
-            self.online = False
+            return
+
+        try:
+            self.interface = meshtastic.serial_interface.SerialInterface(self.port)
+            meshtastic.pub.subscribe(self.on_receive, "meshtastic.receive.data")
+            self.online = True
+            self.OUT = True
+            print(f"[{self.name}] Serial connected on {self.port}.")
+        except Exception as e:
+            print(f"[{self.name}] Serial Error: {e}")
+
+    def _init_tcp(self, owner, name, config):
+        """Initialize via TCP connection to meshtasticd."""
+        self.host = config.get("host", "localhost")
+        self.tcp_port = config.get("tcp_port", 4403)
+        self.port = f"{self.host}:{self.tcp_port}"
+
+        print(f"[{self.name}] Initializing TCP on {self.host}:{self.tcp_port}...")
+
+        if not HAS_MESH_LIB:
+            print(f"[{self.name}] CRITICAL: 'meshtastic' python library not found!")
+            return
+
+        if not HAS_TCP_LIB:
+            print(f"[{self.name}] CRITICAL: 'meshtastic.tcp_interface' not available!")
+            print(f"[{self.name}] Upgrade meshtastic library: pip install --upgrade meshtastic")
+            return
+
+        try:
+            self.interface = meshtastic.tcp_interface.TCPInterface(
+                hostname=self.host,
+                portNumber=self.tcp_port,
+            )
+            meshtastic.pub.subscribe(self.on_receive, "meshtastic.receive.data")
+            self.online = True
+            self.OUT = True
+            print(f"[{self.name}] TCP connected to {self.host}:{self.tcp_port}.")
+        except Exception as e:
+            print(f"[{self.name}] TCP Error: {e}")
 
     def process_incoming(self, data):
         """
@@ -140,7 +187,7 @@ class MeshtasticInterface(Interface):
 
     def detach(self):
         """
-        Clean shutdown to release the serial port.
+        Clean shutdown to release the connection.
         """
         if self.interface:
             try:
@@ -152,4 +199,4 @@ class MeshtasticInterface(Interface):
         print(f"[{self.name}] Interface Detached.")
 
     def __str__(self):
-        return f"Meshtastic Radio ({self.port})"
+        return f"Meshtastic Radio ({self.connection_type}: {self.port})"

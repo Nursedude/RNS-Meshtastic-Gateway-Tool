@@ -1,10 +1,15 @@
 import RNS
+import json
 import os
 import sys
 import time
 
-# Add src folder to path so we can import the driver
-sys.path.insert(0, os.path.join(os.getcwd(), 'src'))
+# Add project root and src folder to path
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, BASE_DIR)
+sys.path.insert(0, os.path.join(BASE_DIR, 'src'))
+
+from version import __version__
 
 # Import the custom driver
 try:
@@ -14,30 +19,41 @@ except ImportError as e:
     print(f"Error: {e}")
     sys.exit(1)
 
+CONFIG_PATH = os.path.join(BASE_DIR, 'config.json')
+
+
+def load_config():
+    """Load gateway config.json, returning empty dict on failure."""
+    try:
+        with open(CONFIG_PATH, 'r') as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError, PermissionError) as e:
+        print(f"[WARN] Could not load {CONFIG_PATH}: {e}")
+        print("[WARN] Using default settings.")
+        return {}
+
+
 def start_gateway():
     print("============================================================")
-    print("  SUPERVISOR NOC | RNS-MESHTASTIC GATEWAY v2.4")
+    print(f"  SUPERVISOR NOC | RNS-MESHTASTIC GATEWAY v{__version__}")
     print("============================================================")
+
+    cfg = load_config()
+    gw_config = cfg.get("gateway", {})
 
     # 1. Initialize Reticulum
     # This automatically loads the default config from ~/.reticulum
     rns_connection = RNS.Reticulum()
 
     print("\n[GO] Loading Interface 'Meshtastic Radio'...")
-    
+
     # 2. Instantiate the Driver
-    # We pass the RNS instance (owner) and a name.
-    # The driver handles the hardware connection internally.
-    mesh_interface = MeshtasticInterface(rns_connection, "Meshtastic Radio")
-    
-    # 3. Register the Interface with Reticulum
-    # This tells RNS to start routing traffic through our driver.
-    # Note: Modern RNS automatically picks up interfaces if added to config,
-    # but for a custom standalone script, we might need to hold the reference.
-    
+    # Pass RNS instance, name, and gateway config for port/settings.
+    mesh_interface = MeshtasticInterface(rns_connection, "Meshtastic Radio", config=gw_config)
+
     if mesh_interface.online:
         print(" [SUCCESS] Interface Loaded! Waiting for traffic...")
-        
+
         # Keep the main thread alive
         try:
             while True:

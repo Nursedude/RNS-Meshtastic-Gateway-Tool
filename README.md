@@ -1,27 +1,70 @@
 # Supervisor NOC: RNS & Meshtastic Gateway
 **Status:** Alpha / Functional
-**Date:** 2026-01-05
+**Version:** 1.0
 
 ## Overview
-This tool bridges the **Reticulum Network Stack (RNS)** with **Meshtastic LoRa radios**. It allows RNS traffic ( LXMF messages, Sideband, etc.) to ride over LoRa hardware using the Meshtastic Python API.
+This tool bridges the **Reticulum Network Stack (RNS)** with **Meshtastic LoRa radios**. It allows RNS traffic (LXMF messages, Sideband, etc.) to ride over LoRa hardware using the Meshtastic Python API.
 
 ## Architecture
-* **Launcher (`launcher.py`):** The main entry point. Initializes RNS and loads drivers.
-* **Driver (`src/Meshtastic_Interface.py`):** Custom driver that translates RNS packets into Meshtastic `sendData()` calls.
-* **Config:** Uses standard `.reticulum` config files.
+* **Launcher (`launcher.py`):** Main entry point. Initializes RNS, loads `config.json`, and starts the Meshtastic driver.
+* **Driver (`src/Meshtastic_Interface.py`):** Custom RNS interface that translates packets into Meshtastic `sendData()` calls. Supports serial/USB connections with auto-detection of serial ports.
+* **Command Center (`src/ui/menu.py`):** Interactive TUI menu for launching the gateway, editing configs, running diagnostics, and more.
+* **Terminal Dashboard (`src/ui/dashboard.py`):** Snapshot view of system info, library versions, serial ports, and gateway config.
+* **Web Dashboard (`src/monitoring/web_dashboard.py`):** Flask-based browser dashboard showing system status, library versions, serial ports, and config. Auto-refreshes every 30s.
+* **Config:** Uses `config.json` for gateway settings and `~/.reticulum/config` for RNS.
 
 ## How to Run
-1.  **Connect Radio:** Ensure Meshtastic device is on `COM3` via USB.
-2.  **Start Gateway:** Double-click `start_gateway.bat`.
-3.  **Verify:** Look for `[Meshtastic Radio] Hardware Connected Successfully`.
+
+### Install Dependencies
+```bash
+pip install -r requirements.txt
+```
+
+### Option A: Command Center (recommended)
+```bash
+python src/ui/menu.py
+```
+This opens the interactive menu where you can launch the gateway, edit configs, view status, and run tools.
+
+### Option B: Direct Gateway Launch
+```bash
+python launcher.py
+```
+
+### Option C: Windows
+Double-click `start_gateway.bat`.
+
+### Setup
+1. **Connect Radio:** Plug in your Meshtastic device via USB.
+2. **Configure:** Copy `config.json.example` to `config.json` and set your serial port:
+   - **Windows:** `COM3`, `COM4`, etc.
+   - **Linux:** `/dev/ttyUSB0`, `/dev/ttyACM0`, etc.
+   - If no port is set, the tool auto-detects connected serial devices.
+3. **Start:** Launch via Command Center or directly with `python launcher.py`.
+4. **Verify:** Look for `[Meshtastic Radio] Hardware Connected Successfully`.
+
+## Features
+* Interactive Command Center (TUI) with box-drawing UI
+* Terminal dashboard with system diagnostics
+* Web dashboard (Flask) with auto-refresh
+* Cross-platform serial port auto-detection
+* Config editor integration (nano/vim/notepad)
+* RNS status tool integration
+* Broadcast test utility
+* Git self-update from menu
 
 ## Troubleshooting
-* **No Red LED?** Check `ingress_control` in driver.
-* **Crash on Start?** Verify `RNS.Interfaces.Interface` inheritance.
-* **Stuck on "Waiting"?** Run `python broadcast.py` to force a test packet.
+* **No LED activity?** Check `ingress_control` in the driver — must be `False`.
+* **Crash on start?** Verify `RNS.Interfaces.Interface` inheritance and check `docs/KNOWLEDGE_BASE.md`.
+* **Stuck on "Waiting"?** Run the test ping from the Command Center (option 8) or `python tests/broadcast.py`.
+* **Wrong port?** Edit `config.json` and set `gateway.port` to your device path.
 
 ## Roadmap
 * [x] Basic Transmit (TX)
 * [x] Basic Receive (RX)
+* [x] Command Center TUI
+* [x] Terminal & Web Dashboards
+* [x] Cross-platform support
+* [ ] TCP connection mode (meshtasticd)
 * [ ] Multi-node testing
 * [ ] Packet acknowledgement handling

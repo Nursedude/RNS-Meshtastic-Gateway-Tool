@@ -1,7 +1,7 @@
 import RNS
-import time
+import os
 import sys
-import threading
+import time
 import collections
 
 # [IMPORT PROTECTION]
@@ -20,13 +20,28 @@ try:
 except ImportError:
     HAS_MESH_LIB = False
 
+
+def _default_serial_port():
+    """Return a platform-appropriate default serial port, with auto-detection."""
+    try:
+        from serial.tools.list_ports import comports
+        ports = [p.device for p in comports()]
+        if ports:
+            return ports[0]
+    except ImportError:
+        pass
+    if os.name == 'nt':
+        return "COM3"
+    return "/dev/ttyUSB0"
+
+
 class MeshtasticInterface(Interface):
     """
     RNS Interface Driver for Meshtastic LoRa Radios.
     Bridges Reticulum packets over the Meshtastic Python API via Serial/USB.
     """
-    
-    def __init__(self, owner, name):
+
+    def __init__(self, owner, name, config=None):
         # --- RNS COMPLIANCE SECTION ---
         # These attributes are strictly required by RNS to prevent runtime crashes.
         self.owner = owner
@@ -38,15 +53,15 @@ class MeshtasticInterface(Interface):
         self.rxb = 0        # Receive Byte Counter
         self.txb = 0        # Transmit Byte Counter
         self.detached = False
-        
+
         # Traffic Shaping & Stats (Critical for Stability)
         self.ingress_control = False
-        self.held_announces = [] 
+        self.held_announces = []
         self.rate_violation_occurred = False
         self.clients = 0
         self.ia_freq_deque = collections.deque(maxlen=100) # Inbound Frequency Log
         self.oa_freq_deque = collections.deque(maxlen=100) # Outbound Frequency Log
-        self.announce_cap = 0 
+        self.announce_cap = 0
         self.ifac_identity = None
 
         # Mode Definition (For rnstatus display)
@@ -56,17 +71,25 @@ class MeshtasticInterface(Interface):
             self.mode = 1
 
         # --- HARDWARE CONFIGURATION ---
-        try:
-            if "interfaces" in owner.config and name in owner.config["interfaces"]:
-                self.port = owner.config["interfaces"][name]["port"]
-            else:
-                self.port = "COM3"
-        except Exception:
-            self.port = "COM3"
+        # Priority: explicit config dict > RNS owner config > platform default
+        self.port = None
+        if config and config.get("port"):
+            self.port = config["port"]
+
+        if not self.port:
+            try:
+                if "interfaces" in owner.config and name in owner.config["interfaces"]:
+                    self.port = owner.config["interfaces"][name]["port"]
+            except Exception:
+                pass
+
+        if not self.port:
+            self.port = _default_serial_port()
 
         print(f"[{self.name}] Initializing on {self.port}...")
 
         # --- HARDWARE CONNECTION ---
+        self.interface = None
         if HAS_MESH_LIB:
             try:
                 self.interface = meshtastic.serial_interface.SerialInterface(self.port)
@@ -90,11 +113,11 @@ class MeshtasticInterface(Interface):
             try:
                 print(f"[{self.name}] >>> TRANSMITTING {len(data)} BYTES TO MESH...")
                 self.txb += len(data)
-                
+
                 # FORCE BROADCAST: destinationId='^all' ensures the packet leaves the radio.
                 # In the future, we can map RNS Hashes to Meshtastic Node IDs here.
                 self.interface.sendData(data, destinationId='^all')
-                
+
                 print(f"[{self.name}] >>> SENT TO RADIO HARDWARE.")
             except Exception as e:
                 print(f"[{self.name}] Transmit Error: {e}")
@@ -110,21 +133,20 @@ class MeshtasticInterface(Interface):
                 # Pass data up to the RNS Core
                 self.owner.inbound(payload, self)
         except Exception as e:
-            # Silently drop malformed packets to avoid log spam
-            pass
+            print(f"[{self.name}] RX Error (packet dropped): {e}")
 
     def process_outgoing(self, data):
         self.process_incoming(data)
 
     def detach(self):
         """
-        Clean shutdown to release the COM port.
+        Clean shutdown to release the serial port.
         """
         if self.interface:
             try:
                 self.interface.close()
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"[{self.name}] Warning during detach: {e}")
         self.detached = True
         self.online = False
         print(f"[{self.name}] Interface Detached.")

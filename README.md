@@ -7,7 +7,7 @@ This tool bridges the **Reticulum Network Stack (RNS)** with **Meshtastic LoRa r
 
 ## Architecture
 * **Launcher (`launcher.py`):** Main entry point. Initializes RNS, loads `config.json`, and starts the Meshtastic driver.
-* **Driver (`src/Meshtastic_Interface.py`):** Custom RNS interface that translates packets into Meshtastic `sendData()` calls. Supports serial/USB connections with auto-detection of serial ports.
+* **Driver (`src/Meshtastic_Interface.py`):** Custom RNS interface that translates packets into Meshtastic `sendData()` calls. Supports serial/USB and TCP (meshtasticd) connections with auto-detection of serial ports.
 * **Command Center (`src/ui/menu.py`):** Interactive TUI menu for launching the gateway, editing configs, running diagnostics, and more.
 * **Terminal Dashboard (`src/ui/dashboard.py`):** Snapshot view of system info, library versions, serial ports, and gateway config.
 * **Web Dashboard (`src/monitoring/web_dashboard.py`):** Flask-based browser dashboard showing system status, library versions, serial ports, and config. Auto-refreshes every 30s.
@@ -31,9 +31,6 @@ This opens the interactive menu where you can launch the gateway, edit configs, 
 python launcher.py
 ```
 
-### Option C: Windows
-Double-click `start_gateway.bat`.
-
 ### Setup
 1. **Connect Radio:** Plug in your Meshtastic device via USB.
 2. **Configure:** Copy `config.json.example` to `config.json` and set your serial port:
@@ -45,13 +42,21 @@ Double-click `start_gateway.bat`.
 
 ## Features
 * Interactive Command Center (TUI) with box-drawing UI
-* Terminal dashboard with system diagnostics
+* Terminal dashboard with system diagnostics and RNS daemon health checks
 * Web dashboard (Flask) with auto-refresh
+* Serial/USB and TCP (meshtasticd) connection modes
+* Auto-reconnect with exponential backoff and jitter
 * Cross-platform serial port auto-detection
 * Config editor integration (nano/vim/notepad)
 * RNS status tool integration
 * Broadcast test utility
 * Git self-update from menu
+
+## Running Tests
+```bash
+pip install pytest
+pytest tests/ -v
+```
 
 ## Troubleshooting
 * **No LED activity?** Check `ingress_control` in the driver — must be `False`.
@@ -65,6 +70,6 @@ Double-click `start_gateway.bat`.
 * [x] Command Center TUI
 * [x] Terminal & Web Dashboards
 * [x] Cross-platform support
-* [ ] TCP connection mode (meshtasticd)
+* [x] TCP connection mode (meshtasticd)
 * [ ] Multi-node testing
 * [ ] Packet acknowledgement handling

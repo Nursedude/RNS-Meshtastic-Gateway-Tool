@@ -5,66 +5,24 @@ Displays a snapshot of gateway status, system info, and config
 directly in the terminal.  No external dependencies (no Flask, no curses).
 Invoked from the Command Center menu (option 'd').
 """
-import json
 import os
 import platform
 import sys
-import time
+
+# Ensure project root is on path
+_BASE = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+if _BASE not in sys.path:
+    sys.path.insert(0, _BASE)
 
 from src.ui.widgets import (
     C, BOX_V, cols, strip_ansi,
     box_top, box_mid, box_bot, box_row, box_section, box_kv,
 )
-
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-CONFIG_PATH = os.path.join(BASE_DIR, 'config.json')
-RNS_CONFIG_DIR = os.path.join(os.path.expanduser("~"), ".reticulum")
-
-
-# ── Data Collection ──────────────────────────────────────────
-def load_config():
-    try:
-        with open(CONFIG_PATH, 'r') as f:
-            return json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError, PermissionError):
-        return None
-
-
-def check_rns_config():
-    """Check if Reticulum config directory exists and has a config file."""
-    config_file = os.path.join(RNS_CONFIG_DIR, "config")
-    if os.path.isfile(config_file):
-        size = os.path.getsize(config_file)
-        return True, f"{size} bytes"
-    return False, "not found"
-
-
-def check_serial_ports():
-    """List serial ports if pyserial is available."""
-    try:
-        from serial.tools.list_ports import comports
-        ports = [p.device for p in comports()]
-        return ports if ports else ["(none detected)"]
-    except ImportError:
-        return ["(pyserial not installed)"]
-
-
-def check_meshtastic_lib():
-    """Check whether meshtastic python lib is importable."""
-    try:
-        import meshtastic
-        return True, getattr(meshtastic, '__version__', 'unknown')
-    except ImportError:
-        return False, "not installed"
-
-
-def check_rns_lib():
-    """Check whether RNS is importable."""
-    try:
-        import RNS
-        return True, getattr(RNS, '__version__', 'unknown')
-    except ImportError:
-        return False, "not installed"
+from src.utils.common import CONFIG_PATH, RNS_CONFIG_DIR, load_config
+from src.utils.service_check import (
+    check_rns_lib, check_meshtastic_lib, check_serial_ports, check_rns_config,
+    check_rnsd_status, check_rns_udp_port,
+)
 
 
 # ── Render ───────────────────────────────────────────────────
@@ -73,7 +31,7 @@ def render_dashboard():
     sys.stdout.flush()
 
     w = min(cols() - 4, 66)
-    cfg = load_config()
+    cfg = load_config(fallback=None)
 
     # Title
     print()
@@ -110,6 +68,18 @@ def render_dashboard():
     # Serial ports
     ports = check_serial_ports()
     print(box_kv("Serial Ports", ", ".join(ports), w))
+    print(box_bot(w))
+    print()
+
+    # ── RNS Daemon Panel ──
+    rnsd_ok, rnsd_info = check_rnsd_status()
+    udp_ok, udp_info = check_rns_udp_port()
+    print(box_top(w))
+    print(box_section("RNS DAEMON", w))
+    rnsd_status = f"{C.GRN}RUNNING{C.RST}  {rnsd_info}" if rnsd_ok else f"{C.YLW}STOPPED{C.RST}  {rnsd_info}"
+    print(box_kv("rnsd", rnsd_status, w))
+    udp_tag = f"{C.GRN}{udp_info}{C.RST}" if udp_ok else f"{C.YLW}{udp_info}{C.RST}"
+    print(box_kv("UDP 37428", udp_tag, w))
     print(box_bot(w))
     print()
 

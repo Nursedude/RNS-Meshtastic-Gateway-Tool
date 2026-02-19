@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Supervisor NOC | Dashboard v{{ version }}</title>
+    <meta http-equiv="refresh" content="30">
+    <style>
+        body { font-family: monospace; background: #1a1a1a; color: #00ff00; padding: 20px; max-width: 800px; margin: 0 auto; }
+        .card { border: 1px solid #444; padding: 15px; margin-bottom: 20px; border-radius: 4px; }
+        h1 { color: #fff; border-bottom: 2px solid #00ff00; padding-bottom: 10px; }
+        h3 { color: #00ccff; margin-top: 0; }
+        .ok { color: #00ff00; font-weight: bold; }
+        .err { color: #ff4444; font-weight: bold; }
+        .dim { color: #888; }
+        table { width: 100%; border-collapse: collapse; }
+        td { padding: 4px 8px; }
+        td:first-child { color: #00ccff; white-space: nowrap; width: 140px; }
+    </style>
+</head>
+<body>
+    <h1>SUPERVISOR NOC <span class="dim">v{{ version }}</span></h1>
+
+    <div class="card">
+        <h3>System</h3>
+        <table>
+            <tr><td>Platform</td><td>{{ system_platform }}</td></tr>
+            <tr><td>Hostname</td><td>{{ hostname }}</td></tr>
+            <tr><td>Python</td><td>{{ python_version }}</td></tr>
+        </table>
+    </div>
+
+    <div class="card">
+        <h3>Libraries</h3>
+        <table>
+            <tr>
+                <td>Reticulum</td>
+                <td>{% if rns_ok %}<span class="ok">OK</span> v{{ rns_ver }}{% else %}<span class="err">MISSING</span>{% endif %}</td>
+            </tr>
+            <tr>
+                <td>Meshtastic</td>
+                <td>{% if mesh_ok %}<span class="ok">OK</span> v{{ mesh_ver }}{% else %}<span class="err">MISSING</span>{% endif %}</td>
+            </tr>
+        </table>
+    </div>
+
+    <div class="card">
+        <h3>RNS Daemon</h3>
+        <table>
+            <tr>
+                <td>rnsd</td>
+                <td>{% if rnsd_ok %}<span class="ok">RUNNING</span> {{ rnsd_info }}{% else %}<span class="dim">STOPPED</span> {{ rnsd_info }}{% endif %}</td>
+            </tr>
+            <tr>
+                <td>UDP 37428</td>
+                <td>{% if udp_ok %}<span class="ok">{{ udp_info }}</span>{% else %}<span class="dim">{{ udp_info }}</span>{% endif %}</td>
+            </tr>
+        </table>
+    </div>
+
+    <div class="card">
+        <h3>Serial Ports</h3>
+        <table>
+            {% for port in serial_ports %}
+            <tr><td colspan="2">{{ port }}</td></tr>
+            {% endfor %}
+        </table>
+    </div>
+
+    <div class="card">
+        <h3>Gateway Config</h3>
+        {% if has_config %}
+        <table>
+            <tr><td>Node Name</td><td>{{ gw_name }}</td></tr>
+            <tr><td>Radio Port</td><td>{{ gw_port }}</td></tr>
+            <tr><td>Connection</td><td>{{ gw_connection }}</td></tr>
+            <tr><td>Bitrate</td><td>{{ gw_bitrate }} bps</td></tr>
+        </table>
+        {% else %}
+        <p class="err">config.json not found or invalid</p>
+        <p class="dim">Expected at: {{ config_path }}</p>
+        {% endif %}
+    </div>
+
+    <p class="dim">Auto-refreshes every 30s</p>
+</body>
+</html>

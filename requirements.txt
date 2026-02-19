@@ -2,3 +2,4 @@ rns
 meshtastic
 pyserial
 flask
+pytest

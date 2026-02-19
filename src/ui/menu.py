@@ -1,12 +1,11 @@
 import os
 import sys
-import json
-import time
 import shutil
 import subprocess
+import time
 import webbrowser
 
-# Ensure project root is on path for version import
+# Ensure project root is on path for imports
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
@@ -16,22 +15,7 @@ from src.ui.widgets import (
     C, cols, center,
     box_top, box_mid, box_bot, box_row, box_section,
 )
-
-# Path Setup
-CONFIG_PATH = os.path.join(BASE_DIR, 'config.json')
-RNS_CONFIG = os.path.join(os.path.expanduser("~"), ".reticulum", "config")
-NOMAD_CONFIG = os.path.join(os.path.expanduser("~"), ".nomadnet", "config")
-
-
-def load_config():
-    try:
-        with open(CONFIG_PATH, 'r') as f:
-            return json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError, PermissionError):
-        return {
-            "gateway": {"name": "Supervisor NOC", "port": "COM3"},
-            "dashboard": {"port": 5000},
-        }
+from src.utils.common import CONFIG_PATH, NOMAD_CONFIG, RNS_CONFIG_FILE, load_config
 
 
 # ── Cross-Platform Helpers ───────────────────────────────────
@@ -170,7 +154,10 @@ def print_menu():
 def main_menu():
     python = get_python()
     while True:
-        cfg = load_config()
+        cfg = load_config(fallback={
+            "gateway": {"name": "Supervisor NOC", "port": "COM3"},
+            "dashboard": {"port": 5000},
+        })
         print_banner(cfg)
         print_menu()
 
@@ -199,7 +186,7 @@ def main_menu():
         elif choice == '4':
             edit_file(CONFIG_PATH)
         elif choice == '5':
-            edit_file(RNS_CONFIG)
+            edit_file(RNS_CONFIG_FILE)
         elif choice == '6':
             edit_file(NOMAD_CONFIG)
         elif choice == '7':

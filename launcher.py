@@ -1,5 +1,4 @@
 import RNS
-import json
 import os
 import random
 import sys
@@ -11,6 +10,7 @@ sys.path.insert(0, BASE_DIR)
 sys.path.insert(0, os.path.join(BASE_DIR, 'src'))
 
 from version import __version__
+from src.utils.common import CONFIG_PATH, load_config
 
 # Import the custom driver
 try:
@@ -20,8 +20,6 @@ except ImportError as e:
     print(f"Error: {e}")
     sys.exit(1)
 
-CONFIG_PATH = os.path.join(BASE_DIR, 'config.json')
-
 # Reconnect settings (inspired by MeshForge ReconnectStrategy)
 RECONNECT_INITIAL_DELAY = 2.0   # seconds
 RECONNECT_MAX_DELAY = 60.0      # seconds
@@ -29,17 +27,6 @@ RECONNECT_MULTIPLIER = 2.0
 RECONNECT_JITTER = 0.15         # 15% jitter to prevent thundering herd
 RECONNECT_MAX_ATTEMPTS = 10
 HEALTH_CHECK_INTERVAL = 30      # seconds between connection health checks
-
-
-def load_config():
-    """Load gateway config.json, returning empty dict on failure."""
-    try:
-        with open(CONFIG_PATH, 'r') as f:
-            return json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError, PermissionError) as e:
-        print(f"[WARN] Could not load {CONFIG_PATH}: {e}")
-        print("[WARN] Using default settings.")
-        return {}
 
 
 def _backoff_delay(attempt):
@@ -55,6 +42,8 @@ def start_gateway():
     print("============================================================")
 
     cfg = load_config()
+    if not cfg:
+        print(f"[WARN] Could not load {CONFIG_PATH}. Using default settings.")
     gw_config = cfg.get("gateway", {})
 
     # 1. Initialize Reticulum

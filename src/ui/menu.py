@@ -20,9 +20,9 @@ from src.utils.common import CONFIG_PATH, NOMAD_CONFIG, RNS_CONFIG_FILE, load_co
 
 # ── Cross-Platform Helpers ───────────────────────────────────
 def clear_screen():
-    """Clear terminal without os.system shell invocation."""
+    """Clear terminal without shell invocation."""
     if os.name == 'nt':
-        os.system('cls')
+        subprocess.run(['cmd', '/c', 'cls'], shell=False)
     else:
         sys.stdout.write('\033[2J\033[H')
         sys.stdout.flush()
@@ -192,7 +192,7 @@ def main_menu():
         elif choice == '7':
             run_tool([python, '-m', 'RNS.Utilities.rnstatus'])
         elif choice == '8':
-            broadcast = os.path.join(BASE_DIR, 'tests', 'broadcast.py')
+            broadcast = os.path.join(BASE_DIR, 'scripts', 'broadcast.py')
             run_tool([python, broadcast])
         elif choice == '9':
             run_tool(['git', 'pull', '--ff-only'], cwd=BASE_DIR)

@@ -60,7 +60,9 @@ def home():
 if __name__ == '__main__':
     cfg = load_config()
     dash = cfg.get('dashboard', {})
-    host = dash.get('host', '0.0.0.0')
+    host = dash.get('host', '127.0.0.1')
     port = dash.get('port', 5000)
+    if host == '0.0.0.0':
+        print(f"[WARN] Dashboard binding to all interfaces (0.0.0.0) — no authentication enabled.")
     print(f"Starting Web Dashboard on {host}:{port}...")
     app.run(host=host, port=port)

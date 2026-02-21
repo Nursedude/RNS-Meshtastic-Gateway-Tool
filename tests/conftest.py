@@ -20,7 +20,7 @@ def tmp_config(tmp_path):
             "port": "/dev/ttyUSB0",
             "bitrate": 500,
         },
-        "dashboard": {"host": "0.0.0.0", "port": 5000},
+        "dashboard": {"host": "127.0.0.1", "port": 5000},
         "features": {},
     }
     config_file = tmp_path / "config.json"

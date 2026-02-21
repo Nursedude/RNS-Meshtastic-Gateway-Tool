@@ -53,7 +53,6 @@ def home():
         gw_port=gw.get('port', '(unset)'),
         gw_connection=gw.get('connection_type', 'serial'),
         gw_bitrate=gw.get('bitrate', '?'),
-        config_path=CONFIG_PATH,
     )
 
 
@@ -63,6 +62,7 @@ if __name__ == '__main__':
     host = dash.get('host', '127.0.0.1')
     port = dash.get('port', 5000)
     if host == '0.0.0.0':
-        print(f"[WARN] Dashboard binding to all interfaces (0.0.0.0) — no authentication enabled.")
+        print("[SECURITY WARNING] Dashboard binding to all interfaces (0.0.0.0).")
+        print("  -> No authentication is enabled. Restrict to 127.0.0.1 in production.")
     print(f"Starting Web Dashboard on {host}:{port}...")
     app.run(host=host, port=port)

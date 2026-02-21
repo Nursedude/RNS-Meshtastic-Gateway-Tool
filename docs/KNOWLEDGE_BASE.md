@@ -68,3 +68,14 @@ This tool is a **lightweight RNS-to-Meshtastic bridge**. For advanced gateway fe
 | Node tracking | No | Yes (unified tracker) |
 | Message routing | Broadcast only | Per-node routing |
 | Web dashboard | Basic (Flask) | Full (WebSocket + metrics) |
+
+## 7. Security Considerations
+
+Guidelines established during the v1.1 security review (see `docs/SECURITY.md`):
+
+* **Config validation:** Always validate config values before use. The `validate_config()` function in `src/utils/common.py` checks types, ranges, and allowed values. Extend it when adding new config fields.
+* **Exception handling:** Catch specific exception types, never bare `except: pass`. Silent failures hide security-relevant errors. Log context when catching exceptions.
+* **Dashboard security:** The Flask web dashboard defaults to `127.0.0.1`. Binding to `0.0.0.0` exposes system information to the network with no authentication. If remote access is needed, place behind a reverse proxy with TLS and authentication.
+* **Dependency management:** All dependencies are pinned to compatible version ranges in `requirements.txt`. Run `pip-audit` or `safety check` periodically. Update pins deliberately, not automatically.
+* **Sensitive files:** `config.json` is gitignored. Never commit credentials, node keys, or deployment-specific configuration to the repository.
+* **TCP transport:** The meshtastic TCP connection (meshtasticd) is unencrypted. The Meshtastic Python API does not support TLS for this channel. Use TCP mode only on trusted/local networks. For untrusted networks, use serial/USB or tunnel TCP through SSH/VPN.

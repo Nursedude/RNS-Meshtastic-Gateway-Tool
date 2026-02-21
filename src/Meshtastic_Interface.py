@@ -1,14 +1,17 @@
 import RNS
+import logging
 import os
 import sys
 import collections
+
+log = logging.getLogger("meshtastic_interface")
 
 # [IMPORT PROTECTION]
 # Ensure we load the correct Interface class structure for this RNS version.
 try:
     from RNS.Interfaces.Interface import Interface
 except ImportError:
-    print("[WARN] RNS.Interfaces.Interface not found, trying RNS.Interface...")
+    log.warning("RNS.Interfaces.Interface not found, trying RNS.Interface...")
     from RNS import Interface
 
 # [HARDWARE CHECK]
@@ -107,10 +110,10 @@ class MeshtasticInterface(Interface):
         if not self.port:
             self.port = _default_serial_port()
 
-        print(f"[{self.name}] Initializing serial on {self.port}...")
+        log.info("[%s] Initializing serial on %s...", self.name, self.port)
 
         if not HAS_MESH_LIB:
-            print(f"[{self.name}] CRITICAL: 'meshtastic' python library not found!")
+            log.critical("[%s] 'meshtastic' python library not found!", self.name)
             return
 
         try:
@@ -118,9 +121,9 @@ class MeshtasticInterface(Interface):
             meshtastic.pub.subscribe(self.on_receive, "meshtastic.receive.data")
             self.online = True
             self.OUT = True
-            print(f"[{self.name}] Serial connected on {self.port}.")
+            log.info("[%s] Serial connected on %s.", self.name, self.port)
         except Exception as e:
-            print(f"[{self.name}] Serial Error: {e}")
+            log.error("[%s] Serial Error: %s", self.name, e)
 
     def _init_tcp(self, owner, name, config):
         """Initialize via TCP connection to meshtasticd."""
@@ -128,15 +131,15 @@ class MeshtasticInterface(Interface):
         self.tcp_port = config.get("tcp_port", 4403)
         self.port = f"{self.host}:{self.tcp_port}"
 
-        print(f"[{self.name}] Initializing TCP on {self.host}:{self.tcp_port}...")
+        log.info("[%s] Initializing TCP on %s:%s...", self.name, self.host, self.tcp_port)
 
         if not HAS_MESH_LIB:
-            print(f"[{self.name}] CRITICAL: 'meshtastic' python library not found!")
+            log.critical("[%s] 'meshtastic' python library not found!", self.name)
             return
 
         if not HAS_TCP_LIB:
-            print(f"[{self.name}] CRITICAL: 'meshtastic.tcp_interface' not available!")
-            print(f"[{self.name}] Upgrade meshtastic library: pip install --upgrade meshtastic")
+            log.critical("[%s] 'meshtastic.tcp_interface' not available!", self.name)
+            log.critical("[%s] Upgrade meshtastic library: pip install --upgrade meshtastic", self.name)
             return
 
         try:
@@ -147,9 +150,9 @@ class MeshtasticInterface(Interface):
             meshtastic.pub.subscribe(self.on_receive, "meshtastic.receive.data")
             self.online = True
             self.OUT = True
-            print(f"[{self.name}] TCP connected to {self.host}:{self.tcp_port}.")
+            log.info("[%s] TCP connected to %s:%s.", self.name, self.host, self.tcp_port)
         except Exception as e:
-            print(f"[{self.name}] TCP Error: {e}")
+            log.error("[%s] TCP Error: %s", self.name, e)
 
     def process_incoming(self, data):
         """
@@ -157,16 +160,16 @@ class MeshtasticInterface(Interface):
         """
         if self.online and self.interface:
             try:
-                print(f"[{self.name}] >>> TRANSMITTING {len(data)} BYTES TO MESH...")
+                log.debug("[%s] >>> TRANSMITTING %d BYTES TO MESH...", self.name, len(data))
                 self.txb += len(data)
 
                 # FORCE BROADCAST: destinationId='^all' ensures the packet leaves the radio.
                 # In the future, we can map RNS Hashes to Meshtastic Node IDs here.
                 self.interface.sendData(data, destinationId='^all')
 
-                print(f"[{self.name}] >>> SENT TO RADIO HARDWARE.")
+                log.debug("[%s] >>> SENT TO RADIO HARDWARE.", self.name)
             except Exception as e:
-                print(f"[{self.name}] Transmit Error: {e}")
+                log.error("[%s] Transmit Error: %s", self.name, e)
 
     def on_receive(self, packet, interface):
         """
@@ -179,7 +182,7 @@ class MeshtasticInterface(Interface):
                 # Pass data up to the RNS Core
                 self.owner.inbound(payload, self)
         except Exception as e:
-            print(f"[{self.name}] RX Error (packet dropped): {e}")
+            log.warning("[%s] RX Error (packet dropped): %s", self.name, e)
 
     def process_outgoing(self, data):
         # RNS calls process_outgoing for TX; delegate to our TX handler
@@ -190,7 +193,7 @@ class MeshtasticInterface(Interface):
         Attempt to reconnect after a connection loss.
         Closes existing interface cleanly, then re-initializes.
         """
-        print(f"[{self.name}] Attempting reconnect...")
+        log.info("[%s] Attempting reconnect...", self.name)
 
         # Unsubscribe to prevent duplicate handlers on re-init
         try:
@@ -228,10 +231,10 @@ class MeshtasticInterface(Interface):
             try:
                 self.interface.close()
             except Exception as e:
-                print(f"[{self.name}] Warning during detach: {e}")
+                log.warning("[%s] Warning during detach: %s", self.name, e)
         self.detached = True
         self.online = False
-        print(f"[{self.name}] Interface Detached.")
+        log.info("[%s] Interface Detached.", self.name)
 
     def __str__(self):
         return f"Meshtastic Radio ({self.connection_type}: {self.port})"

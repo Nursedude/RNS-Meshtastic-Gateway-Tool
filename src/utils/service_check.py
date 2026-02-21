@@ -47,7 +47,7 @@ def check_rnsd_status():
     import subprocess
     try:
         result = subprocess.run(
-            ['pgrep', '-f', 'rnsd'],
+            ['pgrep', '-x', 'rnsd'],
             capture_output=True, text=True, timeout=5,
         )
         if result.returncode == 0:
@@ -61,12 +61,13 @@ def check_rnsd_status():
 
 
 def check_rns_udp_port(port=37428):
-    """Check if RNS UDP port is in use (MeshForge found TCP check was wrong)."""
+    """Check if RNS UDP port is in use."""
     import socket
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
         sock.bind(('127.0.0.1', port))
-        sock.close()
         return False, f"UDP :{port} not in use"
     except OSError:
         return True, f"UDP :{port} in use"
+    finally:
+        sock.close()

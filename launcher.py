@@ -103,4 +103,8 @@ def start_gateway():
         sys.exit(0)
 
 if __name__ == "__main__":
-    start_gateway()
+    try:
+        start_gateway()
+    except Exception as e:
+        print(f"\n[FATAL] Gateway crashed: {e}")
+        sys.exit(1)

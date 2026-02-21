@@ -117,3 +117,93 @@ class TestOnReceive:
 
             iface.on_receive({}, MagicMock())
             mock_owner.inbound.assert_not_called()
+
+
+class TestProcessIncoming:
+    def test_transmit_calls_sendData(self, mock_owner):
+        """process_incoming sends data to mesh radio via sendData."""
+        mocks = _build_mocks()
+
+        with patch.dict('sys.modules', mocks):
+            _clear_cached_modules()
+            from src.Meshtastic_Interface import MeshtasticInterface
+            config = {"connection_type": "tcp", "host": "localhost", "tcp_port": 4403}
+            iface = MeshtasticInterface(mock_owner, "Test", config=config)
+
+            data = b'\xAA\xBB\xCC'
+            iface.process_incoming(data)
+
+            iface.interface.sendData.assert_called_once_with(data, destinationId='^all')
+            assert iface.txb == 3
+
+    def test_transmit_when_offline_does_nothing(self, mock_owner):
+        """process_incoming skips transmission when interface is offline."""
+        mocks = _build_mocks()
+        mocks['meshtastic.serial_interface'].SerialInterface.side_effect = Exception("No device")
+
+        with patch.dict('sys.modules', mocks):
+            _clear_cached_modules()
+            from src.Meshtastic_Interface import MeshtasticInterface
+            iface = MeshtasticInterface(mock_owner, "Test", config={})
+
+            assert iface.online is False
+            iface.process_incoming(b'\x01\x02')
+            assert iface.txb == 0
+
+
+class TestReconnect:
+    def test_reconnect_unsubscribes_then_resubscribes(self, mock_owner):
+        """reconnect unsubscribes old handler before re-initializing."""
+        mocks = _build_mocks()
+        mock_pub = mocks['meshtastic.pub']
+
+        with patch.dict('sys.modules', mocks):
+            _clear_cached_modules()
+            from src.Meshtastic_Interface import MeshtasticInterface
+            config = {"connection_type": "tcp", "host": "localhost", "tcp_port": 4403}
+            iface = MeshtasticInterface(mock_owner, "Test", config=config)
+
+            # Initial subscribe happened during init
+            initial_subscribe_count = mock_pub.subscribe.call_count
+            assert initial_subscribe_count == 1
+
+            iface.reconnect()
+
+            # Should have unsubscribed, then subscribed again
+            mock_pub.unsubscribe.assert_called_once()
+            assert mock_pub.subscribe.call_count == 2
+
+    def test_reconnect_closes_existing_interface(self, mock_owner):
+        """reconnect closes the old interface before creating a new one."""
+        mocks = _build_mocks()
+
+        with patch.dict('sys.modules', mocks):
+            _clear_cached_modules()
+            from src.Meshtastic_Interface import MeshtasticInterface
+            config = {"connection_type": "tcp", "host": "localhost", "tcp_port": 4403}
+            iface = MeshtasticInterface(mock_owner, "Test", config=config)
+
+            old_interface = iface.interface
+            iface.reconnect()
+
+            old_interface.close.assert_called_once()
+            assert iface.online is True
+
+
+class TestDetach:
+    def test_detach_closes_and_marks_offline(self, mock_owner):
+        """detach closes interface and sets offline state."""
+        mocks = _build_mocks()
+
+        with patch.dict('sys.modules', mocks):
+            _clear_cached_modules()
+            from src.Meshtastic_Interface import MeshtasticInterface
+            config = {"connection_type": "tcp", "host": "localhost", "tcp_port": 4403}
+            iface = MeshtasticInterface(mock_owner, "Test", config=config)
+
+            assert iface.online is True
+            iface.detach()
+
+            iface.interface.close.assert_called_once()
+            assert iface.detached is True
+            assert iface.online is False

@@ -59,15 +59,29 @@ class TestCheckSerialPorts:
     def test_with_ports(self):
         mock_port = MagicMock()
         mock_port.device = '/dev/ttyUSB0'
-        with patch('src.utils.service_check.check_serial_ports') as mock_fn:
-            mock_fn.return_value = ['/dev/ttyUSB0']
-            ports = mock_fn()
+        mock_list_ports = MagicMock()
+        mock_list_ports.comports.return_value = [mock_port]
+        mock_serial_tools = MagicMock()
+        mock_serial_tools.list_ports = mock_list_ports
+        mock_serial = MagicMock()
+        mock_serial.tools = mock_serial_tools
+        with patch.dict('sys.modules', {
+            'serial': mock_serial,
+            'serial.tools': mock_serial_tools,
+            'serial.tools.list_ports': mock_list_ports,
+        }):
+            ports = check_serial_ports()
             assert ports == ['/dev/ttyUSB0']
 
     def test_no_ports(self):
-        with patch('src.utils.service_check.check_serial_ports') as mock_fn:
-            mock_fn.return_value = ['(none detected)']
-            ports = mock_fn()
+        mock_list_ports = MagicMock()
+        mock_list_ports.comports.return_value = []
+        with patch.dict('sys.modules', {
+            'serial': MagicMock(),
+            'serial.tools': MagicMock(),
+            'serial.tools.list_ports': mock_list_ports,
+        }):
+            ports = check_serial_ports()
             assert ports == ['(none detected)']
 
 

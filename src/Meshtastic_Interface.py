@@ -65,7 +65,7 @@ class MeshtasticInterface(Interface):
         self.txb = 0        # Transmit Byte Counter
         self.detached = False
 
-        # Traffic Shaping & Stats (Critical for Stability)
+        # Required by RNS Interface base class
         self.ingress_control = False
         self.held_announces = []
         self.rate_violation_occurred = False
@@ -184,6 +184,7 @@ class MeshtasticInterface(Interface):
             print(f"[{self.name}] RX Error (packet dropped): {e}")
 
     def process_outgoing(self, data):
+        # RNS calls process_outgoing for TX; delegate to our TX handler
         self.process_incoming(data)
 
     def reconnect(self):
@@ -192,6 +193,12 @@ class MeshtasticInterface(Interface):
         Closes existing interface cleanly, then re-initializes.
         """
         print(f"[{self.name}] Attempting reconnect...")
+
+        # Unsubscribe to prevent duplicate handlers on re-init
+        try:
+            meshtastic.pub.unsubscribe(self.on_receive, "meshtastic.receive.data")
+        except Exception:
+            pass
 
         # Close existing connection
         if self.interface:

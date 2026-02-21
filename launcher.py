@@ -1,4 +1,5 @@
 import RNS
+import logging
 import os
 import random
 import sys
@@ -11,13 +12,16 @@ sys.path.insert(0, os.path.join(BASE_DIR, 'src'))
 
 from version import __version__
 from src.utils.common import CONFIG_PATH, load_config
+from src.utils.log import setup_logging
+
+log = logging.getLogger("gateway")
 
 # Import the custom driver
 try:
     from Meshtastic_Interface import MeshtasticInterface
 except ImportError as e:
-    print("[CRITICAL] Could not import Meshtastic Driver.")
-    print(f"Error: {e}")
+    logging.basicConfig()
+    log.critical("Could not import Meshtastic Driver: %s", e)
     sys.exit(1)
 
 # Reconnect settings (inspired by MeshForge ReconnectStrategy)
@@ -37,25 +41,27 @@ def _backoff_delay(attempt):
 
 
 def start_gateway():
+    setup_logging()
+
     print("============================================================")
     print(f"  SUPERVISOR NOC | RNS-MESHTASTIC GATEWAY v{__version__}")
     print("============================================================")
 
     cfg = load_config()
     if not cfg:
-        print(f"[WARN] Could not load {CONFIG_PATH}. Using default settings.")
+        log.warning("Could not load %s. Using default settings.", CONFIG_PATH)
     gw_config = cfg.get("gateway", {})
 
     # 1. Initialize Reticulum
     rns_connection = RNS.Reticulum()
 
-    print("\n[GO] Loading Interface 'Meshtastic Radio'...")
+    log.info("Loading Interface 'Meshtastic Radio'...")
 
     # 2. Instantiate the Driver
     mesh_interface = MeshtasticInterface(rns_connection, "Meshtastic Radio", config=gw_config)
 
     if not mesh_interface.online:
-        print(" [FAIL] Initial connection failed. Will retry...")
+        log.warning("Initial connection failed. Will retry...")
 
     # 3. Main loop with health check and auto-reconnect
     reconnect_attempts = 0
@@ -73,32 +79,32 @@ def start_gateway():
                 if now - last_health_check >= HEALTH_CHECK_INTERVAL:
                     last_health_check = now
                     if mesh_interface.interface is None:
-                        print(f"[{mesh_interface.name}] Health check: interface lost")
+                        log.warning("[%s] Health check: interface lost", mesh_interface.name)
                         mesh_interface.online = False
 
                 time.sleep(1)
             else:
                 # Connection is down — attempt reconnect with backoff
                 if reconnect_attempts >= RECONNECT_MAX_ATTEMPTS:
-                    print(f"[WARN] {RECONNECT_MAX_ATTEMPTS} reconnect attempts exhausted. Resetting...")
+                    log.warning("%d reconnect attempts exhausted. Resetting...", RECONNECT_MAX_ATTEMPTS)
                     reconnect_attempts = 0
                     time.sleep(RECONNECT_MAX_DELAY)
                     continue
 
                 delay = _backoff_delay(reconnect_attempts)
                 reconnect_attempts += 1
-                print(f"[RECONNECT] Attempt {reconnect_attempts}/{RECONNECT_MAX_ATTEMPTS} "
-                      f"in {delay:.1f}s...")
+                log.info("Reconnect attempt %d/%d in %.1fs...",
+                         reconnect_attempts, RECONNECT_MAX_ATTEMPTS, delay)
                 time.sleep(delay)
 
                 if mesh_interface.reconnect():
-                    print(f" [SUCCESS] Reconnected after {reconnect_attempts} attempt(s)!")
+                    log.info("Reconnected after %d attempt(s)!", reconnect_attempts)
                     reconnect_attempts = 0
                 else:
-                    print(f" [FAIL] Reconnect attempt {reconnect_attempts} failed.")
+                    log.warning("Reconnect attempt %d failed.", reconnect_attempts)
 
     except KeyboardInterrupt:
-        print("\n[STOP] Shutting down gateway...")
+        log.info("Shutting down gateway...")
         mesh_interface.detach()
         sys.exit(0)
 
@@ -106,5 +112,5 @@ if __name__ == "__main__":
     try:
         start_gateway()
     except Exception as e:
-        print(f"\n[FATAL] Gateway crashed: {e}")
+        log.critical("Gateway crashed: %s", e)
         sys.exit(1)

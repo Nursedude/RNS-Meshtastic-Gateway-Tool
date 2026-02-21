@@ -1,3 +1,4 @@
+import logging
 import os
 import platform
 import sys
@@ -11,10 +12,13 @@ if _BASE not in sys.path:
 
 from version import __version__
 from src.utils.common import CONFIG_PATH, load_config
+from src.utils.log import setup_logging
 from src.utils.service_check import (
     check_rns_lib, check_meshtastic_lib, check_serial_ports,
     check_rnsd_status, check_rns_udp_port,
 )
+
+log = logging.getLogger("dashboard")
 
 app = Flask(
     __name__,
@@ -57,12 +61,13 @@ def home():
 
 
 if __name__ == '__main__':
+    setup_logging()
     cfg = load_config()
     dash = cfg.get('dashboard', {})
     host = dash.get('host', '127.0.0.1')
     port = dash.get('port', 5000)
     if host == '0.0.0.0':
-        print("[SECURITY WARNING] Dashboard binding to all interfaces (0.0.0.0).")
-        print("  -> No authentication is enabled. Restrict to 127.0.0.1 in production.")
-    print(f"Starting Web Dashboard on {host}:{port}...")
+        log.warning("Dashboard binding to all interfaces (0.0.0.0). "
+                     "No authentication is enabled. Restrict to 127.0.0.1 in production.")
+    log.info("Starting Web Dashboard on %s:%s...", host, port)
     app.run(host=host, port=port)

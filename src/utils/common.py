@@ -3,7 +3,10 @@ Centralized paths, config loading, and project constants.
 Single source of truth -- all modules import from here.
 """
 import json
+import logging
 import os
+
+log = logging.getLogger("config")
 
 # ── Canonical Paths ──────────────────────────────────────────
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -70,5 +73,5 @@ def load_config(fallback=_UNSET):
         return fallback
 
     for warning in validate_config(cfg):
-        print(f"[CONFIG WARNING] {warning}")
+        log.warning(warning)
     return cfg

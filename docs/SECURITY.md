@@ -17,7 +17,7 @@
 | S-05 | MEDIUM | TCP connection to meshtasticd is unencrypted | Documented |
 | S-06 | MEDIUM | config.json not in .gitignore | Remediated |
 | S-07 | MEDIUM | System info disclosure via web dashboard | Remediated |
-| S-08 | LOW | No Python logging module — only print() | Noted |
+| S-08 | LOW | No Python logging module — only print() | Remediated |
 | S-09 | LOW | Flask dashboard runs without HTTPS | Noted |
 | S-10 | LOW | No CSRF protection on Flask routes | Noted |
 | S-11 | LOW | Unused imports in driver module | Remediated |
@@ -115,7 +115,10 @@
 
 **Description:** All diagnostic output uses `print()` statements. There is no persistent audit trail, no log levels, and no log rotation. Security events (connection failures, reconnect attempts, packet errors) are lost when stdout is not captured.
 
-**Status:** Noted for future improvement. Recommend migrating to Python's `logging` module.
+**Remediation:** Migrated all core modules to Python's `logging` module:
+- Added `src/utils/log.py` with centralized `setup_logging()` — configures console output and optional `RotatingFileHandler`.
+- Replaced `print()` with appropriate log levels (`debug`, `info`, `warning`, `error`, `critical`) in `launcher.py`, `src/Meshtastic_Interface.py`, `src/utils/common.py`, and `src/monitoring/web_dashboard.py`.
+- TUI rendering files (`src/ui/menu.py`, `src/ui/dashboard.py`) retain `print()` for terminal display, which is not diagnostic logging.
 
 ---
 
@@ -164,7 +167,7 @@ The following areas were reviewed and found to be secure:
 
 ## Recommendations for Future Work
 
-1. **Migrate to `logging` module** — Replace `print()` with structured logging. Add file handler with rotation.
+1. ~~**Migrate to `logging` module**~~ — Done. See S-08 remediation.
 2. **Add type hints** — No type annotations exist in the codebase. Adding them improves IDE support and catches bugs.
 3. **Expand test coverage** — `launcher.py`, `src/ui/menu.py`, and `src/monitoring/web_dashboard.py` have no tests.
 4. **Add authentication to web dashboard** — If the dashboard is ever exposed beyond localhost.

@@ -3,4 +3,7 @@ __pycache__/
 *.pyc
 *.log
 .DS_Store
+config.json
+*.env
+.env
 

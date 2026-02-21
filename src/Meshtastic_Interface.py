@@ -1,8 +1,6 @@
 import RNS
 import os
-import random
 import sys
-import time
 import collections
 
 # [IMPORT PROTECTION]
@@ -103,7 +101,7 @@ class MeshtasticInterface(Interface):
             try:
                 if "interfaces" in owner.config and name in owner.config["interfaces"]:
                     self.port = owner.config["interfaces"][name]["port"]
-            except Exception:
+            except (KeyError, TypeError, AttributeError):
                 pass
 
         if not self.port:
@@ -197,14 +195,14 @@ class MeshtasticInterface(Interface):
         # Unsubscribe to prevent duplicate handlers on re-init
         try:
             meshtastic.pub.unsubscribe(self.on_receive, "meshtastic.receive.data")
-        except Exception:
+        except (KeyError, ValueError, AttributeError):
             pass
 
         # Close existing connection
         if self.interface:
             try:
                 self.interface.close()
-            except Exception:
+            except (OSError, AttributeError):
                 pass
             self.interface = None
 

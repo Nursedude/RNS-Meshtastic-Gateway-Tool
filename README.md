@@ -1,6 +1,6 @@
 # Supervisor NOC: RNS & Meshtastic Gateway
 **Status:** Alpha / Functional
-**Version:** 1.0
+**Version:** 1.1
 
 ## Overview
 This tool bridges the **Reticulum Network Stack (RNS)** with **Meshtastic LoRa radios**. It allows RNS traffic (LXMF messages, Sideband, etc.) to ride over LoRa hardware using the Meshtastic Python API.
@@ -57,6 +57,17 @@ python launcher.py
 pip install pytest
 pytest tests/ -v
 ```
+
+## Security
+This project has undergone a security review. See `docs/SECURITY.md` for:
+* Full findings and severity ratings
+* Remediation status
+* Security best practices for deployment
+
+**Key notes:**
+* The web dashboard binds to `127.0.0.1` by default. Do not expose it to untrusted networks without authentication.
+* Copy `config.json.example` to `config.json` — the latter is gitignored to prevent credential leaks.
+* Keep dependencies updated: `pip install --upgrade -r requirements.txt`
 
 ## Troubleshooting
 * **No LED activity?** Check `ingress_control` in the driver — must be `False`.

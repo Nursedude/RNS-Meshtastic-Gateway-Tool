@@ -61,7 +61,29 @@ def check_rnsd_status():
 
 
 def check_rns_udp_port(port=37428):
-    """Check if RNS UDP port is in use."""
+    """Check if RNS UDP port is in use.
+
+    On Linux, uses passive /proc/net/udp scanning to avoid TOCTOU race
+    conditions and service disruption on resource-constrained hardware
+    (adopted from MeshForge PR #920-922).  Falls back to socket probe
+    on other platforms.
+    """
+    # Linux: passive scan — no socket contention
+    if os.path.isfile('/proc/net/udp'):
+        hex_port = f'{port:04X}'
+        try:
+            with open('/proc/net/udp', 'r') as f:
+                for line in f:
+                    parts = line.strip().split()
+                    if len(parts) >= 2 and ':' in parts[1]:
+                        local_port = parts[1].split(':')[1]
+                        if local_port == hex_port:
+                            return True, f"UDP :{port} in use (passive scan)"
+            return False, f"UDP :{port} not in use"
+        except (OSError, PermissionError):
+            pass  # fall through to socket probe
+
+    # Fallback: socket probe (non-Linux or /proc unavailable)
     import socket
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:

@@ -122,14 +122,26 @@ class MeshtasticInterface(Interface):
             self.online = True
             self.OUT = True
             log.info("[%s] Serial connected on %s.", self.name, self.port)
-        except Exception as e:
+        except (OSError, ConnectionError, ValueError) as e:
             log.error("[%s] Serial Error: %s", self.name, e)
 
     def _init_tcp(self, owner, name, config):
         """Initialize via TCP connection to meshtasticd."""
+        from src.utils.common import validate_hostname, validate_port
+
         self.host = config.get("host", "localhost")
         self.tcp_port = config.get("tcp_port", 4403)
         self.port = f"{self.host}:{self.tcp_port}"
+
+        # Validate host/port before connecting (MeshForge security pattern)
+        ok, err = validate_hostname(self.host)
+        if not ok:
+            log.error("[%s] Invalid TCP host: %s", self.name, err)
+            return
+        ok, err = validate_port(self.tcp_port)
+        if not ok:
+            log.error("[%s] Invalid TCP port: %s", self.name, err)
+            return
 
         log.info("[%s] Initializing TCP on %s:%s...", self.name, self.host, self.tcp_port)
 
@@ -151,7 +163,7 @@ class MeshtasticInterface(Interface):
             self.online = True
             self.OUT = True
             log.info("[%s] TCP connected to %s:%s.", self.name, self.host, self.tcp_port)
-        except Exception as e:
+        except (OSError, ConnectionError, ValueError) as e:
             log.error("[%s] TCP Error: %s", self.name, e)
 
     def process_incoming(self, data):
@@ -168,7 +180,7 @@ class MeshtasticInterface(Interface):
                 self.interface.sendData(data, destinationId='^all')
 
                 log.debug("[%s] >>> SENT TO RADIO HARDWARE.", self.name)
-            except Exception as e:
+            except (OSError, AttributeError, TypeError) as e:
                 log.error("[%s] Transmit Error: %s", self.name, e)
 
     def on_receive(self, packet, interface):
@@ -230,7 +242,7 @@ class MeshtasticInterface(Interface):
         if self.interface:
             try:
                 self.interface.close()
-            except Exception as e:
+            except (OSError, AttributeError) as e:
                 log.warning("[%s] Warning during detach: %s", self.name, e)
         self.detached = True
         self.online = False

@@ -1,7 +1,7 @@
 # Security Review: RNS-Meshtastic Gateway Tool
 
-**Date:** 2026-02-21
-**Version reviewed:** 1.0
+**Latest review:** 2026-02-23 (v1.2)
+**Previous review:** 2026-02-21 (v1.0 → v1.1)
 **Scope:** Full codebase — all Python source, configuration files, templates, and dependencies.
 
 ---
@@ -165,11 +165,107 @@ The following areas were reviewed and found to be secure:
 
 ---
 
+## v1.2 Security Hardening (2026-02-23)
+
+Improvements adopted from MeshForge security patterns and a fresh review of the codebase.
+
+### S-12 — Hostname/IP Validation (MEDIUM → Remediated)
+
+**Location:** `src/utils/common.py`
+
+**Description:** TCP host and dashboard host values from `config.json` were used without validation. A malicious config value starting with `-` could act as flag injection when passed to subprocess or network calls. Values with shell metacharacters (`; rm -rf /`) posed theoretical risk.
+
+**Remediation:** Added `validate_hostname()` function (adopted from MeshForge `_validate_hostname()` pattern):
+- Rejects strings starting with `-` (flag injection prevention)
+- Limits length to 253 characters (RFC 1035)
+- Allows only alphanumeric, dots, hyphens, and colons
+- Applied in `validate_config()`, `Meshtastic_Interface._init_tcp()`, and `web_dashboard.py` before Flask binding
+
+### S-13 — Port Validation Enforcement (MEDIUM → Remediated)
+
+**Location:** `src/utils/common.py`
+
+**Description:** Port validation in v1.1 warned but did not enforce rejection at the point of use. `validate_port()` now provides a reusable check applied at connection time.
+
+**Remediation:** Added `validate_port()` function that rejects non-integers (including booleans), out-of-range values, and type mismatches. Dashboard falls back to safe defaults on invalid port.
+
+### S-14 — $EDITOR Environment Variable Injection (MEDIUM → Remediated)
+
+**Location:** `src/ui/menu.py`
+
+**Description:** `get_editor()` read `$EDITOR`/`$VISUAL` and passed the value directly to `subprocess.run()` without verifying it resolves to an actual executable. A crafted environment variable could execute arbitrary commands.
+
+**Remediation:** Added `shutil.which()` validation — `$EDITOR` is only used if it resolves to a real executable on `$PATH`. Falls back to known safe editors otherwise.
+
+### S-15 — Active UDP Port Probe TOCTOU (LOW → Remediated)
+
+**Location:** `src/utils/service_check.py`
+
+**Description:** `check_rns_udp_port()` actively bound a socket to test port availability, which is a classic TOCTOU (Time-of-Check-Time-of-Use) vulnerability and caused contention with rnsd on Raspberry Pi hardware.
+
+**Remediation:** Replaced with passive `/proc/net/udp` scanning on Linux (adopted from MeshForge PR #920-922). Falls back to socket probe on non-Linux platforms.
+
+### S-16 — Config File Permission Warning (LOW → Remediated)
+
+**Location:** `src/utils/common.py`
+
+**Description:** `config.json` permissions were not checked. A world-readable or world-writable config could expose gateway settings to other users on shared systems.
+
+**Remediation:** Added `check_config_permissions()` that warns on world-readable (`o+r`) or world-writable (`o+w`) config files on POSIX systems. Called automatically by `load_config()`.
+
+### S-17 — Broad Exception Handlers in Driver (MEDIUM → Remediated)
+
+**Location:** `src/Meshtastic_Interface.py`
+
+**Description:** Four remaining `except Exception` blocks in the driver (serial init, TCP init, transmit, detach) could mask security-relevant exceptions.
+
+**Remediation:** Narrowed to specific exception types:
+- Serial/TCP init: `(OSError, ConnectionError, ValueError)`
+- Transmit: `(OSError, AttributeError, TypeError)`
+- Detach: `(OSError, AttributeError)`
+
+### S-18 — Missing Subprocess Timeout (LOW → Remediated)
+
+**Location:** `src/ui/menu.py:25`
+
+**Description:** `clear_screen()` on Windows called `subprocess.run(['cmd', '/c', 'cls'])` without a timeout parameter.
+
+**Remediation:** Added `timeout=5` to the subprocess call.
+
+### S-19 — Menu Loop Not Exception-Protected (LOW → Remediated)
+
+**Location:** `src/ui/menu.py`
+
+**Description:** The `main_menu()` while loop had no exception handling. Any unhandled exception in a menu operation would crash the entire TUI, requiring a restart.
+
+**Remediation:** Wrapped the loop body in try/except (adopted from MeshForge `_safe_call` pattern). Handles `KeyboardInterrupt` for clean exit and logs generic exceptions before continuing.
+
+### S-20 — Crash Traceback Not Logged (LOW → Remediated)
+
+**Location:** `launcher.py`
+
+**Description:** The outer `except Exception` handler logged the error message but not the full traceback, making crash diagnosis difficult.
+
+**Remediation:** Added `exc_info=True` to `log.critical()` to capture the full stack trace.
+
+### S-21 — Handler-Level Log Filtering (LOW → Remediated)
+
+**Location:** `src/utils/log.py`
+
+**Description:** Logging configuration used a single level for all handlers. This prevented the common pattern of keeping console output quiet while capturing full detail to log files.
+
+**Remediation:** Added `console_level` parameter to `setup_logging()` (adopted from MeshForge handler-level filtering). Console and file handlers can now operate at independent levels.
+
+---
+
 ## Recommendations for Future Work
 
-1. ~~**Migrate to `logging` module**~~ — Done. See S-08 remediation.
-2. **Add type hints** — No type annotations exist in the codebase. Adding them improves IDE support and catches bugs.
-3. **Expand test coverage** — `launcher.py`, `src/ui/menu.py`, and `src/monitoring/web_dashboard.py` have no tests.
-4. **Add authentication to web dashboard** — If the dashboard is ever exposed beyond localhost.
-5. **Consider HTTPS** — For any non-localhost deployment, use TLS via reverse proxy or Flask-Talisman.
-6. **Dependency auditing** — Run `pip-audit` or `safety check` periodically to detect known vulnerabilities.
+1. ~~**Migrate to `logging` module**~~ — Done (v1.1, S-08).
+2. ~~**Hostname/port validation**~~ — Done (v1.2, S-12/S-13).
+3. ~~**Narrow exception handlers**~~ — Done (v1.2, S-17).
+4. **Add type hints** — No type annotations exist in the codebase. Adding them improves IDE support and catches bugs.
+5. **Expand test coverage** — `launcher.py`, `src/ui/menu.py`, and `src/monitoring/web_dashboard.py` have limited tests.
+6. **Add authentication to web dashboard** — If the dashboard is ever exposed beyond localhost.
+7. **Consider HTTPS** — For any non-localhost deployment, use TLS via reverse proxy or Flask-Talisman.
+8. **Dependency auditing** — Run `pip-audit` or `safety check` periodically to detect known vulnerabilities.
+9. **Pre-commit hooks** — Consider adding security linting (bandit/ruff S rules) as MeshForge does.

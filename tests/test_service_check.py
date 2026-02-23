@@ -125,8 +125,39 @@ class TestCheckRnsdStatus:
 
 
 class TestCheckRnsUdpPort:
-    def test_port_in_use(self):
-        with patch('socket.socket') as mock_sock_cls:
+    def test_port_in_use_via_proc(self):
+        """Passive /proc/net/udp scan detects port in use."""
+        # Port 37428 = 0x9234
+        proc_content = (
+            "  sl  local_address rem_address   st\n"
+            "   0: 00000000:9234 00000000:0000 07\n"
+        )
+        with patch('os.path.isfile', return_value=True), \
+             patch('builtins.open', create=True) as mock_open:
+            mock_open.return_value.__enter__ = lambda s: iter(proc_content.splitlines())
+            mock_open.return_value.__exit__ = MagicMock(return_value=False)
+            ok, info = check_rns_udp_port()
+            assert ok is True
+            assert "in use" in info
+
+    def test_port_not_in_use_via_proc(self):
+        """Passive /proc/net/udp scan shows port not in use."""
+        proc_content = (
+            "  sl  local_address rem_address   st\n"
+            "   0: 00000000:1234 00000000:0000 07\n"
+        )
+        with patch('os.path.isfile', return_value=True), \
+             patch('builtins.open', create=True) as mock_open:
+            mock_open.return_value.__enter__ = lambda s: iter(proc_content.splitlines())
+            mock_open.return_value.__exit__ = MagicMock(return_value=False)
+            ok, info = check_rns_udp_port()
+            assert ok is False
+            assert "not in use" in info
+
+    def test_fallback_socket_probe_port_in_use(self):
+        """Socket probe fallback when /proc/net/udp is unavailable."""
+        with patch('os.path.isfile', return_value=False), \
+             patch('socket.socket') as mock_sock_cls:
             mock_sock = MagicMock()
             mock_sock.bind.side_effect = OSError("Address already in use")
             mock_sock_cls.return_value = mock_sock
@@ -134,8 +165,10 @@ class TestCheckRnsUdpPort:
             assert ok is True
             assert "in use" in info
 
-    def test_port_not_in_use(self):
-        with patch('socket.socket') as mock_sock_cls:
+    def test_fallback_socket_probe_port_free(self):
+        """Socket probe fallback when /proc/net/udp is unavailable."""
+        with patch('os.path.isfile', return_value=False), \
+             patch('socket.socket') as mock_sock_cls:
             mock_sock = MagicMock()
             mock_sock_cls.return_value = mock_sock
             ok, info = check_rns_udp_port()

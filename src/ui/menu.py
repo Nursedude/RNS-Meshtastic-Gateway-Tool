@@ -22,16 +22,20 @@ from src.utils.common import CONFIG_PATH, NOMAD_CONFIG, RNS_CONFIG_FILE, load_co
 def clear_screen():
     """Clear terminal without shell invocation."""
     if os.name == 'nt':
-        subprocess.run(['cmd', '/c', 'cls'], shell=False)
+        subprocess.run(['cmd', '/c', 'cls'], shell=False, timeout=5)
     else:
         sys.stdout.write('\033[2J\033[H')
         sys.stdout.flush()
 
 
 def get_editor():
-    """Detect a text editor available on this platform."""
+    """Detect a text editor available on this platform.
+
+    Validates $EDITOR/$VISUAL with shutil.which() to prevent command
+    injection via malicious environment variables (MeshForge pattern).
+    """
     env_editor = os.environ.get('EDITOR') or os.environ.get('VISUAL')
-    if env_editor:
+    if env_editor and shutil.which(env_editor):
         return env_editor
     if os.name == 'nt':
         return 'notepad'
@@ -154,54 +158,61 @@ def print_menu():
 def main_menu():
     python = get_python()
     while True:
-        cfg = load_config(fallback={
-            "gateway": {"name": "Supervisor NOC", "port": "COM3"},
-            "dashboard": {"port": 5000},
-        })
-        print_banner(cfg)
-        print_menu()
+        try:
+            cfg = load_config(fallback={
+                "gateway": {"name": "Supervisor NOC", "port": "COM3"},
+                "dashboard": {"port": 5000},
+            })
+            print_banner(cfg)
+            print_menu()
 
-        choice = input(f"\n  {C.CYN}Supervisor ▸{C.RST} ").strip().lower()
+            choice = input(f"\n  {C.CYN}Supervisor ▸{C.RST} ").strip().lower()
 
-        if choice == '1':
-            launcher = os.path.join(BASE_DIR, 'launcher.py')
-            launch_detached([python, launcher])
-            print(f"  {C.GRN}  Gateway launched.{C.RST}")
-            time.sleep(1)
-        elif choice == '2':
-            nomadnet = shutil.which('nomadnet')
-            if nomadnet:
-                launch_detached([nomadnet])
-                print(f"  {C.GRN}  NomadNet launched.{C.RST}")
-            else:
-                launch_detached([python, '-m', 'nomadnet'])
-                print(f"  {C.GRN}  NomadNet launched (module mode).{C.RST}")
-            time.sleep(1)
-        elif choice == '3':
-            dash_port = cfg.get('dashboard', {}).get('port', 5000)
-            webbrowser.open(f"http://localhost:{dash_port}")
-        elif choice == 'd':
-            dashboard = os.path.join(BASE_DIR, 'src', 'ui', 'dashboard.py')
-            run_tool([python, dashboard])
-        elif choice == '4':
-            edit_file(CONFIG_PATH)
-        elif choice == '5':
-            edit_file(RNS_CONFIG_FILE)
-        elif choice == '6':
-            edit_file(NOMAD_CONFIG)
-        elif choice == '7':
-            run_tool([python, '-m', 'RNS.Utilities.rnstatus'])
-        elif choice == '8':
-            broadcast = os.path.join(BASE_DIR, 'scripts', 'broadcast.py')
-            run_tool([python, broadcast])
-        elif choice == '9':
-            run_tool(['git', 'pull', '--ff-only'], cwd=BASE_DIR)
-        elif choice == '0':
+            if choice == '1':
+                launcher = os.path.join(BASE_DIR, 'launcher.py')
+                launch_detached([python, launcher])
+                print(f"  {C.GRN}  Gateway launched.{C.RST}")
+                time.sleep(1)
+            elif choice == '2':
+                nomadnet = shutil.which('nomadnet')
+                if nomadnet:
+                    launch_detached([nomadnet])
+                    print(f"  {C.GRN}  NomadNet launched.{C.RST}")
+                else:
+                    launch_detached([python, '-m', 'nomadnet'])
+                    print(f"  {C.GRN}  NomadNet launched (module mode).{C.RST}")
+                time.sleep(1)
+            elif choice == '3':
+                dash_port = cfg.get('dashboard', {}).get('port', 5000)
+                webbrowser.open(f"http://localhost:{dash_port}")
+            elif choice == 'd':
+                dashboard = os.path.join(BASE_DIR, 'src', 'ui', 'dashboard.py')
+                run_tool([python, dashboard])
+            elif choice == '4':
+                edit_file(CONFIG_PATH)
+            elif choice == '5':
+                edit_file(RNS_CONFIG_FILE)
+            elif choice == '6':
+                edit_file(NOMAD_CONFIG)
+            elif choice == '7':
+                run_tool([python, '-m', 'RNS.Utilities.rnstatus'])
+            elif choice == '8':
+                broadcast = os.path.join(BASE_DIR, 'scripts', 'broadcast.py')
+                run_tool([python, broadcast])
+            elif choice == '9':
+                run_tool(['git', 'pull', '--ff-only'], cwd=BASE_DIR)
+            elif choice == '0':
+                print(f"\n  {C.DIM}Goodbye.{C.RST}\n")
+                sys.exit(0)
+            elif choice:
+                print(f"\n  {C.YLW}  Unknown option: '{choice}'{C.RST}")
+                time.sleep(1)
+        except KeyboardInterrupt:
             print(f"\n  {C.DIM}Goodbye.{C.RST}\n")
             sys.exit(0)
-        elif choice:
-            print(f"\n  {C.YLW}  Unknown option: '{choice}'{C.RST}")
-            time.sleep(1)
+        except Exception as e:
+            print(f"\n  {C.RED}  Error: {e}{C.RST}")
+            time.sleep(2)
 
 
 if __name__ == "__main__":

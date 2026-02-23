@@ -5,6 +5,8 @@ Single source of truth -- all modules import from here.
 import json
 import logging
 import os
+import re
+import stat
 
 log = logging.getLogger("config")
 
@@ -20,6 +22,66 @@ NOMAD_CONFIG = os.path.join(os.path.expanduser("~"), ".nomadnet", "config")
 _UNSET = object()
 
 _VALID_CONNECTION_TYPES = ("serial", "tcp")
+
+_HOSTNAME_RE = re.compile(r'^[a-zA-Z0-9._:\-]+$')
+
+
+def validate_hostname(host):
+    """Validate a hostname/IP string (MeshForge pattern).
+
+    Rejects flag-injection attempts (leading '-'), overly long values,
+    and characters outside the safe set.
+
+    Returns:
+        (ok: bool, error_message: str)
+    """
+    if not host or not isinstance(host, str):
+        return False, "hostname must be a non-empty string"
+    if host.startswith('-'):
+        return False, "hostname must not start with '-' (flag injection)"
+    if len(host) > 253:
+        return False, "hostname exceeds 253 characters"
+    if not _HOSTNAME_RE.match(host):
+        return False, f"hostname contains invalid characters: {host!r}"
+    return True, ""
+
+
+def validate_port(port):
+    """Validate a network port number.
+
+    Returns:
+        (ok: bool, error_message: str)
+    """
+    if not isinstance(port, int) or isinstance(port, bool):
+        return False, f"port must be an integer, got {type(port).__name__}"
+    if port < 1 or port > 65535:
+        return False, f"port must be 1-65535, got {port}"
+    return True, ""
+
+
+def check_config_permissions(path):
+    """Warn if config file has overly permissive modes (Linux/POSIX only).
+
+    Returns a list of warning strings (empty when permissions are fine).
+    """
+    warnings = []
+    if os.name != 'posix':
+        return warnings
+    try:
+        mode = os.stat(path).st_mode
+        if mode & stat.S_IROTH:
+            warnings.append(
+                f"{path} is world-readable (mode {oct(mode)}). "
+                "Consider: chmod 600 " + path
+            )
+        if mode & stat.S_IWOTH:
+            warnings.append(
+                f"{path} is world-writable (mode {oct(mode)}). "
+                "Consider: chmod 600 " + path
+            )
+    except OSError:
+        pass
+    return warnings
 
 
 def validate_config(cfg):
@@ -41,8 +103,16 @@ def validate_config(cfg):
 
         for port_key in ("tcp_port",):
             val = gw.get(port_key)
-            if val is not None and (not isinstance(val, int) or val < 1 or val > 65535):
-                warnings.append(f"gateway.{port_key} must be an integer 1-65535, got {val!r}")
+            if val is not None:
+                ok, err = validate_port(val) if isinstance(val, int) and not isinstance(val, bool) else (False, f"must be an integer, got {type(val).__name__}")
+                if not ok:
+                    warnings.append(f"gateway.{port_key}: {err}")
+
+        host = gw.get("host")
+        if host is not None:
+            ok, err = validate_hostname(host)
+            if not ok:
+                warnings.append(f"gateway.host: {err}")
 
         bitrate = gw.get("bitrate")
         if bitrate is not None and (not isinstance(bitrate, (int, float)) or bitrate <= 0):
@@ -51,8 +121,15 @@ def validate_config(cfg):
     dash = cfg.get("dashboard", {})
     if isinstance(dash, dict):
         port = dash.get("port")
-        if port is not None and (not isinstance(port, int) or port < 1 or port > 65535):
-            warnings.append(f"dashboard.port must be an integer 1-65535, got {port!r}")
+        if port is not None:
+            ok, err = validate_port(port) if isinstance(port, int) and not isinstance(port, bool) else (False, f"must be an integer, got {type(port).__name__}")
+            if not ok:
+                warnings.append(f"dashboard.port: {err}")
+        dash_host = dash.get("host")
+        if dash_host is not None:
+            ok, err = validate_hostname(dash_host)
+            if not ok:
+                warnings.append(f"dashboard.host: {err}")
 
     return warnings
 
@@ -72,6 +149,8 @@ def load_config(fallback=_UNSET):
     except (FileNotFoundError, json.JSONDecodeError, PermissionError):
         return fallback
 
+    for warning in check_config_permissions(CONFIG_PATH):
+        log.warning(warning)
     for warning in validate_config(cfg):
         log.warning(warning)
     return cfg

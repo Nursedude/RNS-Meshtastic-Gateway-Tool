@@ -55,7 +55,7 @@ class TestMeshtasticInterfaceInit:
     def test_default_rns_attributes(self, mock_owner):
         """All required RNS attributes are set during init."""
         mocks = _build_mocks()
-        mocks['meshtastic.serial_interface'].SerialInterface.side_effect = Exception("No device")
+        mocks['meshtastic.serial_interface'].SerialInterface.side_effect = OSError("No device")
 
         with patch.dict('sys.modules', mocks):
             _clear_cached_modules()
@@ -92,7 +92,7 @@ class TestOnReceive:
     def test_valid_packet_forwarded(self, mock_owner):
         """on_receive passes decoded payload to owner.inbound."""
         mocks = _build_mocks()
-        mocks['meshtastic.serial_interface'].SerialInterface.side_effect = Exception("No device")
+        mocks['meshtastic.serial_interface'].SerialInterface.side_effect = OSError("No device")
 
         with patch.dict('sys.modules', mocks):
             _clear_cached_modules()
@@ -108,7 +108,7 @@ class TestOnReceive:
     def test_malformed_packet_ignored(self, mock_owner):
         """on_receive handles packets without decoded/payload gracefully."""
         mocks = _build_mocks()
-        mocks['meshtastic.serial_interface'].SerialInterface.side_effect = Exception("No device")
+        mocks['meshtastic.serial_interface'].SerialInterface.side_effect = OSError("No device")
 
         with patch.dict('sys.modules', mocks):
             _clear_cached_modules()
@@ -139,7 +139,7 @@ class TestProcessIncoming:
     def test_transmit_when_offline_does_nothing(self, mock_owner):
         """process_incoming skips transmission when interface is offline."""
         mocks = _build_mocks()
-        mocks['meshtastic.serial_interface'].SerialInterface.side_effect = Exception("No device")
+        mocks['meshtastic.serial_interface'].SerialInterface.side_effect = OSError("No device")
 
         with patch.dict('sys.modules', mocks):
             _clear_cached_modules()

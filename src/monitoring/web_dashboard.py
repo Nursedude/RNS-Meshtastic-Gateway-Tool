@@ -11,7 +11,7 @@ if _BASE not in sys.path:
     sys.path.insert(0, _BASE)
 
 from version import __version__
-from src.utils.common import CONFIG_PATH, load_config
+from src.utils.common import CONFIG_PATH, load_config, validate_hostname, validate_port
 from src.utils.log import setup_logging
 from src.utils.service_check import (
     check_rns_lib, check_meshtastic_lib, check_serial_ports,
@@ -66,6 +66,17 @@ if __name__ == '__main__':
     dash = cfg.get('dashboard', {})
     host = dash.get('host', '127.0.0.1')
     port = dash.get('port', 5000)
+
+    # Validate host/port before binding (MeshForge security pattern)
+    ok, err = validate_hostname(host)
+    if not ok:
+        log.error("Invalid dashboard host: %s. Falling back to 127.0.0.1", err)
+        host = '127.0.0.1'
+    ok, err = validate_port(port)
+    if not ok:
+        log.error("Invalid dashboard port: %s. Falling back to 5000", err)
+        port = 5000
+
     if host == '0.0.0.0':
         log.warning("Dashboard binding to all interfaces (0.0.0.0). "
                      "No authentication is enabled. Restrict to 127.0.0.1 in production.")

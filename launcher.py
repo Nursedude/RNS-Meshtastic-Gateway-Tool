@@ -112,5 +112,5 @@ if __name__ == "__main__":
     try:
         start_gateway()
     except Exception as e:
-        log.critical("Gateway crashed: %s", e)
+        log.critical("Gateway crashed: %s", e, exc_info=True)
         sys.exit(1)

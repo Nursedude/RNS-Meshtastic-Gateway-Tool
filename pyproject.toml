@@ -1,0 +1,96 @@
+# RNS-Meshtastic Gateway Tool — Project Configuration
+# ====================================================
+
+[project]
+name = "rns-meshtastic-gateway"
+version = "1.2"
+description = "Bridge between Reticulum Network Stack (RNS) and Meshtastic LoRa radios"
+readme = "README.md"
+requires-python = ">=3.9"
+license = {text = "MIT"}
+keywords = ["meshtastic", "reticulum", "mesh", "lora", "gateway"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Topic :: Communications :: Ham Radio",
+    "Topic :: System :: Networking",
+]
+
+# ============================================================================
+# PYTEST CONFIGURATION
+# ============================================================================
+
+[tool.pytest.ini_options]
+minversion = "7.0"
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+
+addopts = [
+    "-v",
+    "--tb=short",
+    "--strict-markers",
+    "--timeout=30",
+]
+
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "hardware: marks tests requiring physical hardware (auto-skipped in CI)",
+    "network: marks tests requiring network access",
+]
+
+filterwarnings = [
+    "ignore::DeprecationWarning",
+    "ignore::PendingDeprecationWarning",
+]
+
+# ============================================================================
+# COVERAGE CONFIGURATION
+# ============================================================================
+
+[tool.coverage.run]
+source = ["src"]
+branch = true
+omit = [
+    "*/tests/*",
+    "*/__pycache__/*",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+]
+show_missing = true
+
+# ============================================================================
+# RUFF CONFIGURATION (Linter)
+# ============================================================================
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "B",   # flake8-bugbear
+    "S",   # flake8-bandit (security)
+]
+ignore = [
+    "E501",  # line too long
+    "S101",  # assert used (OK in tests)
+    "S603",  # subprocess without shell=True check (we validate)
+    "S607",  # partial path for subprocess (we validate paths)
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S101"]

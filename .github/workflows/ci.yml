@@ -1,0 +1,77 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: Test Suite
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.9', '3.11']
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: Run tests
+        run: pytest tests/ -v --tb=short --timeout=30 -x
+        env:
+          CI: true
+
+  syntax-check:
+    name: Syntax Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Check Python syntax
+        run: |
+          python -m py_compile launcher.py
+          python -m py_compile version.py
+          python -m py_compile scripts/broadcast.py
+          find src -name "*.py" -type f -exec python -m py_compile {} \;
+          echo "All syntax checks passed"
+
+  security:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check for shell=True violations
+        run: |
+          VIOLATIONS=$(grep -rn "subprocess\.\(run\|Popen\|call\).*shell\s*=\s*True" src/ scripts/ launcher.py --include="*.py" 2>/dev/null || true)
+          if [ -n "$VIOLATIONS" ]; then
+            echo "ERROR: Found shell=True in subprocess calls:"
+            echo "$VIOLATIONS"
+            exit 1
+          fi
+          echo "No shell=True violations found"
+
+      - name: Check for hardcoded secrets
+        run: |
+          if grep -rn "password\s*=\s*['\"][^'\"]\+" src/ --include="*.py" | grep -v "#" | head -5; then
+            echo "Warning: Potential hardcoded passwords found"
+          fi
+          echo "Security scan complete"

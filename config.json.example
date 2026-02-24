@@ -5,7 +5,8 @@
         "port": "COM3",
         "host": "localhost",
         "tcp_port": 4403,
-        "bitrate": 500
+        "bitrate": 500,
+        "rns_configdir": null
     },
     "dashboard": {
         "host": "127.0.0.1",

@@ -1,7 +1,8 @@
+from typing import Any, Dict, Optional
+
 import RNS
 import logging
 import os
-import sys
 import collections
 
 log = logging.getLogger("meshtastic_interface")
@@ -53,7 +54,10 @@ class MeshtasticInterface(Interface):
     Supports serial/USB and TCP (meshtasticd) connections.
     """
 
-    def __init__(self, owner, name, config=None):
+    # Meshtastic maximum payload size (bytes)
+    MESHTASTIC_MAX_PAYLOAD = 228
+
+    def __init__(self, owner: Any, name: str, config: Optional[Dict[str, Any]] = None) -> None:
         # --- RNS COMPLIANCE SECTION ---
         # These attributes are strictly required by RNS to prevent runtime crashes.
         self.owner = owner
@@ -98,7 +102,7 @@ class MeshtasticInterface(Interface):
         else:
             self._init_serial(owner, name, config or {})
 
-    def _init_serial(self, owner, name, config):
+    def _init_serial(self, owner: Any, name: str, config: Dict[str, Any]) -> None:
         """Initialize via serial/USB connection."""
         # Priority: explicit config > RNS owner config > platform default
         self.port = config.get("port")
@@ -128,7 +132,7 @@ class MeshtasticInterface(Interface):
         except (OSError, ConnectionError, ValueError) as e:
             log.error("[%s] Serial Error: %s", self.name, e)
 
-    def _init_tcp(self, owner, name, config):
+    def _init_tcp(self, owner: Any, name: str, config: Dict[str, Any]) -> None:
         """Initialize via TCP connection to meshtasticd."""
         from src.utils.common import validate_hostname, validate_port
 
@@ -169,7 +173,7 @@ class MeshtasticInterface(Interface):
         except (OSError, ConnectionError, ValueError) as e:
             log.error("[%s] TCP Error: %s", self.name, e)
 
-    def process_incoming(self, data):
+    def process_incoming(self, data: bytes) -> None:
         """Handle data flowing FROM Reticulum TO the Mesh Radio (TX).
 
         NOTE on RNS naming convention: In the RNS Interface API,
@@ -179,6 +183,11 @@ class MeshtasticInterface(Interface):
         """
         if self.online and self.interface:
             try:
+                if len(data) > self.MESHTASTIC_MAX_PAYLOAD:
+                    log.warning("[%s] Payload %d bytes exceeds Meshtastic limit (%d). "
+                                "Radio may fragment or drop.", self.name, len(data),
+                                self.MESHTASTIC_MAX_PAYLOAD)
+
                 log.debug("[%s] >>> TRANSMITTING %d BYTES TO MESH...", self.name, len(data))
                 self.txb += len(data)
                 self.tx_packets += 1
@@ -192,7 +201,7 @@ class MeshtasticInterface(Interface):
                 self.tx_errors += 1
                 log.error("[%s] Transmit Error: %s", self.name, e)
 
-    def on_receive(self, packet, interface):
+    def on_receive(self, packet: Dict[str, Any], interface: Any) -> None:
         """Handle data flowing FROM the Mesh Radio TO Reticulum (RX).
 
         Called by the meshtastic pub/sub system when a data packet
@@ -206,10 +215,10 @@ class MeshtasticInterface(Interface):
                 self.rx_packets += 1
                 # Pass data up to the RNS Core
                 self.owner.inbound(payload, self)
-        except Exception as e:
+        except (KeyError, TypeError, AttributeError, ValueError) as e:
             log.warning("[%s] RX Error (packet dropped): %s", self.name, e)
 
-    def process_outgoing(self, data):
+    def process_outgoing(self, data: bytes) -> None:
         """Handle outbound data from RNS.
 
         NOTE on RNS naming convention: "outgoing" means data leaving
@@ -219,7 +228,7 @@ class MeshtasticInterface(Interface):
         """
         self.process_incoming(data)
 
-    def reconnect(self):
+    def reconnect(self) -> bool:
         """
         Attempt to reconnect after a connection loss.
         Closes existing interface cleanly, then re-initializes.
@@ -254,7 +263,7 @@ class MeshtasticInterface(Interface):
 
         return self.online
 
-    def detach(self):
+    def detach(self) -> None:
         """
         Clean shutdown to release the connection.
         """

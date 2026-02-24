@@ -30,6 +30,7 @@ class TestDashboardRoute:
              patch('src.monitoring.web_dashboard.check_meshtastic_lib', return_value=(True, "2.3.0")), \
              patch('src.monitoring.web_dashboard.check_serial_ports', return_value=["/dev/ttyUSB0"]), \
              patch('src.monitoring.web_dashboard.check_rnsd_status', return_value=(True, "PID 1234")), \
+             patch('src.monitoring.web_dashboard.check_meshtasticd_status', return_value=(True, "active")), \
              patch('src.monitoring.web_dashboard.check_rns_udp_port', return_value=(True, "in use")):
 
             response = flask_client.get('/')
@@ -42,6 +43,7 @@ class TestDashboardRoute:
              patch('src.monitoring.web_dashboard.check_meshtastic_lib', return_value=(False, "not installed")), \
              patch('src.monitoring.web_dashboard.check_serial_ports', return_value=["(none)"]), \
              patch('src.monitoring.web_dashboard.check_rnsd_status', return_value=(False, "not running")), \
+             patch('src.monitoring.web_dashboard.check_meshtasticd_status', return_value=(False, "not running")), \
              patch('src.monitoring.web_dashboard.check_rns_udp_port', return_value=(False, "not in use")):
 
             response = flask_client.get('/')
@@ -55,6 +57,7 @@ class TestDashboardRoute:
              patch('src.monitoring.web_dashboard.check_meshtastic_lib', return_value=(False, "not installed")), \
              patch('src.monitoring.web_dashboard.check_serial_ports', return_value=["(none)"]), \
              patch('src.monitoring.web_dashboard.check_rnsd_status', return_value=(False, "not running")), \
+             patch('src.monitoring.web_dashboard.check_meshtasticd_status', return_value=(False, "not running")), \
              patch('src.monitoring.web_dashboard.check_rns_udp_port', return_value=(False, "not in use")):
 
             response = flask_client.get('/')
@@ -69,8 +72,45 @@ class TestDashboardRoute:
              patch('src.monitoring.web_dashboard.check_meshtastic_lib', return_value=(True, "2.4.0")), \
              patch('src.monitoring.web_dashboard.check_serial_ports', return_value=["/dev/ttyACM0"]), \
              patch('src.monitoring.web_dashboard.check_rnsd_status', return_value=(True, "PID 999")), \
+             patch('src.monitoring.web_dashboard.check_meshtasticd_status', return_value=(True, "active")), \
              patch('src.monitoring.web_dashboard.check_rns_udp_port', return_value=(True, "in use")):
 
             response = flask_client.get('/')
             assert b'0.8.0' in response.data
             assert b'2.4.0' in response.data
+
+
+class TestSecurityHeaders:
+    """Verify OWASP security headers are present on all responses."""
+
+    def _mock_all_checks(self):
+        """Return a context manager that mocks all service check calls."""
+        from contextlib import ExitStack
+        stack = ExitStack()
+        stack.enter_context(patch('src.monitoring.web_dashboard.load_config', return_value={}))
+        stack.enter_context(patch('src.monitoring.web_dashboard.check_rns_lib', return_value=(False, "n/a")))
+        stack.enter_context(patch('src.monitoring.web_dashboard.check_meshtastic_lib', return_value=(False, "n/a")))
+        stack.enter_context(patch('src.monitoring.web_dashboard.check_serial_ports', return_value=[]))
+        stack.enter_context(patch('src.monitoring.web_dashboard.check_rnsd_status', return_value=(False, "n/a")))
+        stack.enter_context(patch('src.monitoring.web_dashboard.check_meshtasticd_status', return_value=(False, "n/a")))
+        stack.enter_context(patch('src.monitoring.web_dashboard.check_rns_udp_port', return_value=(False, "n/a")))
+        return stack
+
+    def test_csp_header_present(self, flask_client):
+        """Content-Security-Policy header should be set."""
+        with self._mock_all_checks():
+            response = flask_client.get('/')
+            assert 'Content-Security-Policy' in response.headers
+            assert "default-src 'self'" in response.headers['Content-Security-Policy']
+
+    def test_x_content_type_options_header(self, flask_client):
+        """X-Content-Type-Options: nosniff should be set."""
+        with self._mock_all_checks():
+            response = flask_client.get('/')
+            assert response.headers.get('X-Content-Type-Options') == 'nosniff'
+
+    def test_x_frame_options_header(self, flask_client):
+        """X-Frame-Options: DENY should be set."""
+        with self._mock_all_checks():
+            response = flask_client.get('/')
+            assert response.headers.get('X-Frame-Options') == 'DENY'

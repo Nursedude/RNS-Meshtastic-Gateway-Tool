@@ -43,11 +43,15 @@
     </div>
 
     <div class="card">
-        <h3>RNS Daemon</h3>
+        <h3>Services</h3>
         <table>
             <tr>
                 <td>rnsd</td>
                 <td>{% if rnsd_ok %}<span class="ok">RUNNING</span> {{ rnsd_info }}{% else %}<span class="dim">STOPPED</span> {{ rnsd_info }}{% endif %}</td>
+            </tr>
+            <tr>
+                <td>meshtasticd</td>
+                <td>{% if meshd_ok %}<span class="ok">RUNNING</span> {{ meshd_info }}{% else %}<span class="dim">STOPPED</span> {{ meshd_info }}{% endif %}</td>
             </tr>
             <tr>
                 <td>UDP 37428</td>

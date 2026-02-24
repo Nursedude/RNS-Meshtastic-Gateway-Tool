@@ -11,11 +11,11 @@ if _BASE not in sys.path:
     sys.path.insert(0, _BASE)
 
 from version import __version__
-from src.utils.common import CONFIG_PATH, load_config, validate_hostname, validate_port
+from src.utils.common import load_config, validate_hostname, validate_port
 from src.utils.log import setup_logging
 from src.utils.service_check import (
     check_rns_lib, check_meshtastic_lib, check_serial_ports,
-    check_rnsd_status, check_rns_udp_port,
+    check_rnsd_status, check_meshtasticd_status, check_rns_udp_port,
 )
 
 log = logging.getLogger("dashboard")
@@ -24,6 +24,15 @@ app = Flask(
     __name__,
     template_folder=os.path.join(os.path.dirname(__file__), 'templates'),
 )
+
+
+@app.after_request
+def add_security_headers(response):
+    """Add security headers to every response (OWASP recommendations)."""
+    response.headers['Content-Security-Policy'] = "default-src 'self'; style-src 'self' 'unsafe-inline'"
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    response.headers['X-Frame-Options'] = 'DENY'
+    return response
 
 
 @app.route('/')
@@ -35,6 +44,7 @@ def home():
     mesh_ok, mesh_ver = check_meshtastic_lib()
     serial_ports = check_serial_ports()
     rnsd_ok, rnsd_info = check_rnsd_status()
+    meshd_ok, meshd_info = check_meshtasticd_status()
     udp_ok, udp_info = check_rns_udp_port()
 
     return render_template(
@@ -50,6 +60,8 @@ def home():
         serial_ports=serial_ports,
         rnsd_ok=rnsd_ok,
         rnsd_info=rnsd_info,
+        meshd_ok=meshd_ok,
+        meshd_info=meshd_info,
         udp_ok=udp_ok,
         udp_info=udp_info,
         has_config=bool(cfg),

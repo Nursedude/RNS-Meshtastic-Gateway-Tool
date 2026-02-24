@@ -2,6 +2,7 @@ import RNS
 import logging
 import os
 import random
+import signal
 import sys
 import time
 
@@ -63,7 +64,18 @@ def start_gateway():
     if not mesh_interface.online:
         log.warning("Initial connection failed. Will retry...")
 
-    # 3. Main loop with health check and auto-reconnect
+    # 3. Signal handling for clean systemd/SIGTERM shutdown
+    def _handle_signal(signum, frame):
+        sig_name = signal.Signals(signum).name
+        log.info("Received %s — shutting down gateway...", sig_name)
+        mesh_interface.detach()
+        sys.exit(0)
+
+    signal.signal(signal.SIGTERM, _handle_signal)
+    if hasattr(signal, 'SIGHUP'):
+        signal.signal(signal.SIGHUP, _handle_signal)
+
+    # 4. Main loop with health check and auto-reconnect
     reconnect_attempts = 0
     last_health_check = time.time()
 

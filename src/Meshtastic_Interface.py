@@ -64,6 +64,9 @@ class MeshtasticInterface(Interface):
         self.bitrate = 500  # Standard LoRa Bitrate proxy
         self.rxb = 0        # Receive Byte Counter
         self.txb = 0        # Transmit Byte Counter
+        self.rx_packets = 0  # Receive Packet Counter
+        self.tx_packets = 0  # Transmit Packet Counter
+        self.tx_errors = 0   # Transmit Error Counter
         self.detached = False
 
         # Required by RNS Interface base class
@@ -167,13 +170,18 @@ class MeshtasticInterface(Interface):
             log.error("[%s] TCP Error: %s", self.name, e)
 
     def process_incoming(self, data):
-        """
-        Handles data flowing FROM Reticulum TO the Mesh Radio (TX).
+        """Handle data flowing FROM Reticulum TO the Mesh Radio (TX).
+
+        NOTE on RNS naming convention: In the RNS Interface API,
+        "incoming" means data arriving *into this interface* from the
+        RNS transport layer — i.e., data that needs to be *transmitted*
+        out over the physical medium (the mesh radio).
         """
         if self.online and self.interface:
             try:
                 log.debug("[%s] >>> TRANSMITTING %d BYTES TO MESH...", self.name, len(data))
                 self.txb += len(data)
+                self.tx_packets += 1
 
                 # FORCE BROADCAST: destinationId='^all' ensures the packet leaves the radio.
                 # In the future, we can map RNS Hashes to Meshtastic Node IDs here.
@@ -181,23 +189,34 @@ class MeshtasticInterface(Interface):
 
                 log.debug("[%s] >>> SENT TO RADIO HARDWARE.", self.name)
             except (OSError, AttributeError, TypeError) as e:
+                self.tx_errors += 1
                 log.error("[%s] Transmit Error: %s", self.name, e)
 
     def on_receive(self, packet, interface):
-        """
-        Handles data flowing FROM the Mesh Radio TO Reticulum (RX).
+        """Handle data flowing FROM the Mesh Radio TO Reticulum (RX).
+
+        Called by the meshtastic pub/sub system when a data packet
+        arrives on the radio. Extracts the payload and passes it up
+        to the RNS transport layer via owner.inbound().
         """
         try:
             if 'decoded' in packet and 'payload' in packet['decoded']:
                 payload = packet['decoded']['payload']
                 self.rxb += len(payload)
+                self.rx_packets += 1
                 # Pass data up to the RNS Core
                 self.owner.inbound(payload, self)
         except Exception as e:
             log.warning("[%s] RX Error (packet dropped): %s", self.name, e)
 
     def process_outgoing(self, data):
-        # RNS calls process_outgoing for TX; delegate to our TX handler
+        """Handle outbound data from RNS.
+
+        NOTE on RNS naming convention: "outgoing" means data leaving
+        the RNS transport layer — which is the same direction as
+        process_incoming for this interface type.  Both result in
+        transmission over the mesh radio.
+        """
         self.process_incoming(data)
 
     def reconnect(self):
@@ -250,3 +269,12 @@ class MeshtasticInterface(Interface):
 
     def __str__(self):
         return f"Meshtastic Radio ({self.connection_type}: {self.port})"
+
+    def __repr__(self):
+        return (
+            f"<MeshtasticInterface name={self.name!r} type={self.connection_type} "
+            f"port={self.port!r} online={self.online} "
+            f"tx={self.tx_packets}pkt/{self.txb}B "
+            f"rx={self.rx_packets}pkt/{self.rxb}B "
+            f"errors={self.tx_errors}>"
+        )

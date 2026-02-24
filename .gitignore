@@ -6,4 +6,12 @@ __pycache__/
 config.json
 *.env
 .env
+.venv/
+venv/
+htmlcov/
+.pytest_cache/
+.mypy_cache/
+*.egg-info/
+dist/
+build/
 

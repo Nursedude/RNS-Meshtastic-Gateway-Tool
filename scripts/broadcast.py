@@ -32,7 +32,7 @@ def broadcast_test(timeout=5):
 
     log.info("Initializing Reticulum...")
     try:
-        reticulum = RNS.Reticulum()
+        RNS.Reticulum()  # Initialize stack (instance used implicitly by RNS)
     except Exception as e:
         log.critical("Failed to initialize Reticulum: %s", e)
         return 1

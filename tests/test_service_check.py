@@ -7,6 +7,7 @@ from src.utils.service_check import (
     check_serial_ports,
     check_rns_config,
     check_rnsd_status,
+    check_meshtasticd_status,
     check_rns_udp_port,
 )
 
@@ -120,6 +121,60 @@ class TestCheckRnsdStatus:
     def test_pgrep_unavailable(self):
         with patch('subprocess.run', side_effect=FileNotFoundError):
             ok, info = check_rnsd_status()
+            assert ok is False
+            assert "pgrep unavailable" in info
+
+
+class TestCheckMeshtasticdStatus:
+    def test_running_via_systemctl(self):
+        """meshtasticd active via systemctl."""
+        mock_result = MagicMock(returncode=0, stdout="active\n")
+        with patch('subprocess.run', return_value=mock_result):
+            ok, info = check_meshtasticd_status()
+            assert ok is True
+            assert "active" in info
+
+    def test_inactive_via_systemctl(self):
+        """meshtasticd inactive via systemctl."""
+        mock_result = MagicMock(returncode=3, stdout="inactive\n")
+        with patch('subprocess.run', return_value=mock_result):
+            ok, info = check_meshtasticd_status()
+            assert ok is False
+            assert "inactive" in info
+
+    def test_fallback_to_pgrep_running(self):
+        """Falls back to pgrep when systemctl is unavailable."""
+        call_count = [0]
+
+        def mock_run(cmd, **kwargs):
+            call_count[0] += 1
+            if cmd[0] == 'systemctl':
+                raise FileNotFoundError("no systemctl")
+            # pgrep call
+            result = MagicMock(returncode=0, stdout="9876\n")
+            return result
+
+        with patch('subprocess.run', side_effect=mock_run):
+            ok, info = check_meshtasticd_status()
+            assert ok is True
+            assert "9876" in info
+
+    def test_fallback_to_pgrep_not_running(self):
+        """Falls back to pgrep, meshtasticd not running."""
+        def mock_run(cmd, **kwargs):
+            if cmd[0] == 'systemctl':
+                raise FileNotFoundError("no systemctl")
+            return MagicMock(returncode=1, stdout="")
+
+        with patch('subprocess.run', side_effect=mock_run):
+            ok, info = check_meshtasticd_status()
+            assert ok is False
+            assert "not running" in info
+
+    def test_both_unavailable(self):
+        """Neither systemctl nor pgrep available."""
+        with patch('subprocess.run', side_effect=FileNotFoundError):
+            ok, info = check_meshtasticd_status()
             assert ok is False
             assert "pgrep unavailable" in info
 

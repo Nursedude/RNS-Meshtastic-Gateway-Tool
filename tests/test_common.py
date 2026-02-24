@@ -1,7 +1,11 @@
 """Tests for src/utils/common.py — config loading and validation."""
+import os
 from unittest.mock import patch
 
-from src.utils.common import validate_hostname, validate_port, validate_config
+from src.utils.common import (
+    validate_hostname, validate_port, validate_config,
+    validate_message_length, get_real_user_home, check_config_permissions,
+)
 
 
 class TestValidateHostname:
@@ -169,3 +173,93 @@ class TestLoadConfig:
             from src.utils.common import load_config
             result = load_config(fallback=sentinel)
             assert result['gateway']['name'] == 'Fallback'
+
+
+class TestValidateMessageLength:
+    def test_within_limit(self):
+        ok, msg = validate_message_length(b'\x00' * 100)
+        assert ok is True
+        assert "100 bytes OK" in msg
+
+    def test_exactly_at_limit(self):
+        ok, msg = validate_message_length(b'\x00' * 228)
+        assert ok is True
+
+    def test_exceeds_limit(self):
+        ok, msg = validate_message_length(b'\x00' * 300)
+        assert ok is False
+        assert "exceeds" in msg
+
+    def test_empty_data(self):
+        ok, msg = validate_message_length(b'')
+        assert ok is True
+        assert "0 bytes OK" in msg
+
+    def test_custom_limit(self):
+        ok, msg = validate_message_length(b'\x00' * 50, max_bytes=10)
+        assert ok is False
+
+    def test_non_bytes_rejected(self):
+        ok, msg = validate_message_length("not bytes")
+        assert ok is False
+        assert "must be bytes" in msg
+
+
+class TestGetRealUserHome:
+    def test_returns_string(self):
+        home = get_real_user_home()
+        assert isinstance(home, str)
+        assert len(home) > 0
+
+    def test_uses_sudo_user_when_set(self):
+        """When SUDO_USER is set, should resolve that user's home."""
+        import pwd
+        # Use current user as the sudo user for testing
+        current_user = os.environ.get('USER', 'root')
+        try:
+            expected_home = pwd.getpwnam(current_user).pw_dir
+        except (KeyError, ImportError):
+            return  # Skip on systems where pwd lookup fails
+
+        with patch.dict(os.environ, {'SUDO_USER': current_user}):
+            home = get_real_user_home()
+            assert home == expected_home
+
+    def test_falls_back_without_sudo_user(self):
+        """Without SUDO_USER, should use os.path.expanduser."""
+        env = dict(os.environ)
+        env.pop('SUDO_USER', None)
+        with patch.dict(os.environ, env, clear=True):
+            home = get_real_user_home()
+            assert home == os.path.expanduser("~")
+
+
+class TestCheckConfigPermissions:
+    def test_world_readable_warned(self, tmp_path):
+        """World-readable config should produce a warning."""
+        config_file = tmp_path / "config.json"
+        config_file.write_text("{}")
+        config_file.chmod(0o644)  # world-readable
+
+        if os.name != 'posix':
+            return  # Only meaningful on POSIX
+
+        warnings = check_config_permissions(str(config_file))
+        assert any("world-readable" in w for w in warnings)
+
+    def test_secure_permissions_no_warning(self, tmp_path):
+        """Config with 600 perms should produce no warnings."""
+        config_file = tmp_path / "config.json"
+        config_file.write_text("{}")
+        config_file.chmod(0o600)
+
+        if os.name != 'posix':
+            return
+
+        warnings = check_config_permissions(str(config_file))
+        assert len(warnings) == 0
+
+    def test_nonexistent_file_no_warning(self, tmp_path):
+        """Missing config file should not raise or warn."""
+        warnings = check_config_permissions(str(tmp_path / "missing.json"))
+        assert len(warnings) == 0

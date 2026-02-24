@@ -7,6 +7,23 @@ on:
     branches: [main]
 
 jobs:
+  lint:
+    name: Lint (ruff)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install ruff
+        run: pip install ruff
+
+      - name: Run ruff
+        run: ruff check src/ launcher.py scripts/
+
   test:
     name: Test Suite
     runs-on: ubuntu-latest
@@ -29,8 +46,8 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements-dev.txt
 
-      - name: Run tests
-        run: pytest tests/ -v --tb=short --timeout=30 -x
+      - name: Run tests with coverage
+        run: pytest tests/ -v --tb=short --timeout=30 -x --cov=src --cov-report=term-missing
         env:
           CI: true
 
@@ -75,3 +92,23 @@ jobs:
             echo "Warning: Potential hardcoded passwords found"
           fi
           echo "Security scan complete"
+
+  dependency-audit:
+    name: Dependency Audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies and pip-audit
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pip-audit
+
+      - name: Run pip-audit
+        run: pip-audit

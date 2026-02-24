@@ -60,6 +60,45 @@ def check_rnsd_status():
         return False, "check timed out"
 
 
+def check_meshtasticd_status():
+    """Check if meshtasticd service is running.
+
+    Tries systemctl first (SSOT for systemd), then falls back to pgrep.
+    Returns (running: bool, detail: str).
+    """
+    import subprocess
+
+    # Prefer systemctl (single source of truth for systemd services)
+    try:
+        result = subprocess.run(
+            ['systemctl', 'is-active', 'meshtasticd'],
+            capture_output=True, text=True, timeout=5,
+        )
+        state = result.stdout.strip()
+        if state == 'active':
+            return True, "active (systemd)"
+        return False, f"{state} (systemd)"
+    except FileNotFoundError:
+        pass  # systemctl not available, fall through
+    except subprocess.TimeoutExpired:
+        return False, "check timed out"
+
+    # Fallback: pgrep
+    try:
+        result = subprocess.run(
+            ['pgrep', '-x', 'meshtasticd'],
+            capture_output=True, text=True, timeout=5,
+        )
+        if result.returncode == 0:
+            pids = result.stdout.strip().split('\n')
+            return True, f"PID(s): {', '.join(pids)}"
+        return False, "not running"
+    except FileNotFoundError:
+        return False, "cannot check (pgrep unavailable)"
+    except subprocess.TimeoutExpired:
+        return False, "check timed out"
+
+
 def check_rns_udp_port(port=37428):
     """Check if RNS UDP port is in use.
 

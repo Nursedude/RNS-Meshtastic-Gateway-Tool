@@ -21,7 +21,7 @@ from src.ui.widgets import (
 from src.utils.common import CONFIG_PATH, RNS_CONFIG_DIR, load_config
 from src.utils.service_check import (
     check_rns_lib, check_meshtastic_lib, check_serial_ports, check_rns_config,
-    check_rnsd_status, check_rns_udp_port,
+    check_rnsd_status, check_meshtasticd_status, check_rns_udp_port,
 )
 
 
@@ -71,13 +71,16 @@ def render_dashboard():
     print(box_bot(w))
     print()
 
-    # ── RNS Daemon Panel ──
+    # ── Services Panel ──
     rnsd_ok, rnsd_info = check_rnsd_status()
+    meshd_ok, meshd_info = check_meshtasticd_status()
     udp_ok, udp_info = check_rns_udp_port()
     print(box_top(w))
-    print(box_section("RNS DAEMON", w))
+    print(box_section("SERVICES", w))
     rnsd_status = f"{C.GRN}RUNNING{C.RST}  {rnsd_info}" if rnsd_ok else f"{C.YLW}STOPPED{C.RST}  {rnsd_info}"
     print(box_kv("rnsd", rnsd_status, w))
+    meshd_status = f"{C.GRN}RUNNING{C.RST}  {meshd_info}" if meshd_ok else f"{C.YLW}STOPPED{C.RST}  {meshd_info}"
+    print(box_kv("meshtasticd", meshd_status, w))
     udp_tag = f"{C.GRN}{udp_info}{C.RST}" if udp_ok else f"{C.YLW}{udp_info}{C.RST}"
     print(box_kv("UDP 37428", udp_tag, w))
     print(box_bot(w))

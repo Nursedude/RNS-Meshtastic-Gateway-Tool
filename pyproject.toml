@@ -87,7 +87,10 @@ select = [
 ]
 ignore = [
     "E501",  # line too long
+    "E402",  # module-level import not at top (required for sys.path setup)
     "S101",  # assert used (OK in tests)
+    "S104",  # possible binding to all interfaces (we warn about this in code)
+    "S311",  # pseudo-random for jitter (not cryptographic)
     "S603",  # subprocess without shell=True check (we validate)
     "S607",  # partial path for subprocess (we validate paths)
 ]

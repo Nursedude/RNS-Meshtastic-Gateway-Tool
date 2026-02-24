@@ -1,9 +1,9 @@
 import RNS
 import logging
 import os
-import random
 import signal
 import sys
+import threading
 import time
 
 # Add project root and src folder to path
@@ -14,6 +14,7 @@ sys.path.insert(0, os.path.join(BASE_DIR, 'src'))
 from version import __version__
 from src.utils.common import CONFIG_PATH, load_config
 from src.utils.log import setup_logging
+from src.utils.reconnect import ReconnectStrategy
 
 log = logging.getLogger("gateway")
 
@@ -25,20 +26,10 @@ except ImportError as e:
     log.critical("Could not import Meshtastic Driver: %s", e)
     sys.exit(1)
 
-# Reconnect settings (inspired by MeshForge ReconnectStrategy)
-RECONNECT_INITIAL_DELAY = 2.0   # seconds
-RECONNECT_MAX_DELAY = 60.0      # seconds
-RECONNECT_MULTIPLIER = 2.0
-RECONNECT_JITTER = 0.15         # 15% jitter to prevent thundering herd
-RECONNECT_MAX_ATTEMPTS = 10
 HEALTH_CHECK_INTERVAL = 30      # seconds between connection health checks
 
-
-def _backoff_delay(attempt):
-    """Calculate reconnect delay with exponential backoff + jitter."""
-    base = min(RECONNECT_INITIAL_DELAY * (RECONNECT_MULTIPLIER ** attempt), RECONNECT_MAX_DELAY)
-    jitter = base * RECONNECT_JITTER
-    return base + random.uniform(-jitter, jitter)
+# Module-level stop event for clean shutdown
+_stop_event = threading.Event()
 
 
 def start_gateway():
@@ -53,8 +44,9 @@ def start_gateway():
         log.warning("Could not load %s. Using default settings.", CONFIG_PATH)
     gw_config = cfg.get("gateway", {})
 
-    # 1. Initialize Reticulum
-    rns_connection = RNS.Reticulum()
+    # 1. Initialize Reticulum (pass configdir to avoid EADDRINUSE when rnsd is running)
+    rns_configdir = gw_config.get("rns_configdir", None)
+    rns_connection = RNS.Reticulum(configdir=rns_configdir)
 
     log.info("Loading Interface 'Meshtastic Radio'...")
 
@@ -68,57 +60,63 @@ def start_gateway():
     def _handle_signal(signum, frame):
         sig_name = signal.Signals(signum).name
         log.info("Received %s — shutting down gateway...", sig_name)
-        mesh_interface.detach()
-        sys.exit(0)
+        _stop_event.set()
 
     signal.signal(signal.SIGTERM, _handle_signal)
     if hasattr(signal, 'SIGHUP'):
         signal.signal(signal.SIGHUP, _handle_signal)
 
     # 4. Main loop with health check and auto-reconnect
-    reconnect_attempts = 0
-    last_health_check = time.time()
+    strategy = ReconnectStrategy.for_meshtastic()
+    last_health_check = 0.0
 
     try:
-        while True:
-            now = time.time()
-
+        while not _stop_event.is_set():
             if mesh_interface.online:
                 # Connection is healthy — reset attempt counter
-                reconnect_attempts = 0
+                strategy.record_success()
 
                 # Periodic health check: verify the interface is still responsive
+                now = time.time()
                 if now - last_health_check >= HEALTH_CHECK_INTERVAL:
                     last_health_check = now
                     if mesh_interface.interface is None:
                         log.warning("[%s] Health check: interface lost", mesh_interface.name)
                         mesh_interface.online = False
+                        continue
 
-                time.sleep(1)
+                # Interruptible sleep — wakes immediately on SIGTERM
+                _stop_event.wait(1)
             else:
                 # Connection is down — attempt reconnect with backoff
-                if reconnect_attempts >= RECONNECT_MAX_ATTEMPTS:
-                    log.warning("%d reconnect attempts exhausted. Resetting...", RECONNECT_MAX_ATTEMPTS)
-                    reconnect_attempts = 0
-                    time.sleep(RECONNECT_MAX_DELAY)
+                if not strategy.should_retry():
+                    log.warning("%d reconnect attempts exhausted. Resetting...",
+                                strategy.max_attempts)
+                    strategy.reset()
+                    strategy.wait(_stop_event, timeout=strategy.max_delay)
                     continue
 
-                delay = _backoff_delay(reconnect_attempts)
-                reconnect_attempts += 1
+                delay = strategy.get_delay()
+                strategy.record_failure()
                 log.info("Reconnect attempt %d/%d in %.1fs...",
-                         reconnect_attempts, RECONNECT_MAX_ATTEMPTS, delay)
-                time.sleep(delay)
+                         strategy.attempts, strategy.max_attempts, delay)
+                strategy.wait(_stop_event, timeout=delay)
+
+                if _stop_event.is_set():
+                    break
 
                 if mesh_interface.reconnect():
-                    log.info("Reconnected after %d attempt(s)!", reconnect_attempts)
-                    reconnect_attempts = 0
+                    log.info("Reconnected after %d attempt(s)!", strategy.attempts)
+                    strategy.record_success()
                 else:
-                    log.warning("Reconnect attempt %d failed.", reconnect_attempts)
+                    log.warning("Reconnect attempt %d failed.", strategy.attempts)
 
     except KeyboardInterrupt:
         log.info("Shutting down gateway...")
-        mesh_interface.detach()
-        sys.exit(0)
+
+    # Clean shutdown
+    mesh_interface.detach()
+    sys.exit(0)
 
 if __name__ == "__main__":
     try:

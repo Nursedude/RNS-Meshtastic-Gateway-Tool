@@ -15,7 +15,7 @@ from src.ui.widgets import (
     C, cols, center,
     box_top, box_mid, box_bot, box_row, box_section,
 )
-from src.utils.common import CONFIG_PATH, NOMAD_CONFIG, RNS_CONFIG_FILE, load_config
+from src.utils.common import CONFIG_PATH, NOMAD_CONFIG, RNS_CONFIG_FILE, load_config, validate_port
 
 
 # ── Cross-Platform Helpers ───────────────────────────────────
@@ -184,7 +184,16 @@ def main_menu():
                 time.sleep(1)
             elif choice == '3':
                 dash_port = cfg.get('dashboard', {}).get('port', 5000)
-                webbrowser.open(f"http://localhost:{dash_port}")
+                ok, err = validate_port(dash_port) if isinstance(dash_port, int) else (False, "not an integer")
+                if ok:
+                    try:
+                        webbrowser.open(f"http://localhost:{dash_port}")
+                    except OSError as e:
+                        print(f"  {C.RED}  Could not open browser: {e}{C.RST}")
+                        time.sleep(2)
+                else:
+                    print(f"  {C.RED}  Invalid dashboard port: {err}{C.RST}")
+                    time.sleep(2)
             elif choice == 'd':
                 dashboard = os.path.join(BASE_DIR, 'src', 'ui', 'dashboard.py')
                 run_tool([python, dashboard])

@@ -10,13 +10,33 @@ import stat
 
 log = logging.getLogger("config")
 
+
+def get_real_user_home():
+    """Return the real user's home directory, even under sudo.
+
+    When running with ``sudo``, ``os.path.expanduser("~")`` returns
+    ``/root`` instead of the invoking user's home.  This function checks
+    the ``SUDO_USER`` environment variable and resolves the correct path.
+    Adopted from MeshForge ``utils/paths.py:get_real_user_home()``.
+    """
+    sudo_user = os.environ.get("SUDO_USER")
+    if sudo_user:
+        try:
+            import pwd
+            return pwd.getpwnam(sudo_user).pw_dir
+        except (KeyError, ImportError):
+            pass
+    return os.path.expanduser("~")
+
+
 # ── Canonical Paths ──────────────────────────────────────────
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 CONFIG_PATH = os.path.join(BASE_DIR, 'config.json')
-RNS_CONFIG_DIR = os.path.join(os.path.expanduser("~"), ".reticulum")
+_HOME = get_real_user_home()
+RNS_CONFIG_DIR = os.path.join(_HOME, ".reticulum")
 RNS_CONFIG_FILE = os.path.join(RNS_CONFIG_DIR, "config")
-NOMAD_CONFIG = os.path.join(os.path.expanduser("~"), ".nomadnet", "config")
+NOMAD_CONFIG = os.path.join(_HOME, ".nomadnet", "config")
 
 
 _UNSET = object()
@@ -132,6 +152,24 @@ def validate_config(cfg):
                 warnings.append(f"dashboard.host: {err}")
 
     return warnings
+
+
+def validate_message_length(data, max_bytes=228):
+    """Validate that a message payload fits within the Meshtastic frame limit.
+
+    Args:
+        data: The bytes payload to check.
+        max_bytes: Maximum allowed length (default: 228, Meshtastic LoRa limit).
+
+    Returns:
+        (ok: bool, message: str)
+    """
+    if not isinstance(data, (bytes, bytearray)):
+        return False, f"data must be bytes, got {type(data).__name__}"
+    length = len(data)
+    if length > max_bytes:
+        return False, f"payload {length} bytes exceeds {max_bytes} byte limit"
+    return True, f"payload {length} bytes OK"
 
 
 def load_config(fallback=_UNSET):

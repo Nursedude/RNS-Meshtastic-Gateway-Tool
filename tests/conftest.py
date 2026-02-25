@@ -104,3 +104,13 @@ def mock_meshtastic_modules():
         'meshtastic.tcp_interface': mock_tcp,
         'meshtastic.pub': mock_pub,
     }
+
+
+@pytest.fixture
+def mock_all_modules(mock_rns_modules, mock_meshtastic_modules):
+    """Combined RNS + Meshtastic mock modules dict for sys.modules patching.
+
+    Consolidates the duplicated _build_mocks() pattern used in
+    test_meshtastic_interface.py and test_launcher.py.
+    """
+    return {**mock_rns_modules, **mock_meshtastic_modules}

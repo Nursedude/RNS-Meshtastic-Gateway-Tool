@@ -124,12 +124,12 @@ class TestStartGateway:
             mock_interface.detach.assert_called_once()
 
     def test_health_check_detects_lost_interface(self):
-        """Health check should mark interface offline when interface is None."""
+        """Health check should mark interface offline when health_check() returns False."""
         launcher, mock_rns = _import_launcher()
 
         mock_interface = MagicMock()
         mock_interface.online = True
-        mock_interface.interface = None  # Lost interface
+        mock_interface.health_check.return_value = False  # Health check fails
         mock_interface.name = "TestRadio"
 
         call_count = 0
@@ -155,7 +155,7 @@ class TestStartGateway:
             with pytest.raises(SystemExit):
                 launcher.start_gateway()
 
-            # After health check with interface=None, online should be False
+            # After health_check() returns False, online should be set to False
             assert mock_interface.online is False
 
 

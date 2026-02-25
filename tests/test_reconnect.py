@@ -124,3 +124,48 @@ class TestFactoryMethods:
         a.record_failure()
         assert a.attempts == 1
         assert b.attempts == 0
+
+
+class TestSlowStart:
+    def test_throughput_factor_starts_low_after_recovery(self):
+        """After reconnect, throughput factor should start near 0.1."""
+        strategy = ReconnectStrategy(slow_start_duration=1.0)
+        strategy.record_failure()
+        strategy.record_success()  # Triggers slow-start
+        factor = strategy.throughput_factor()
+        assert 0.0 < factor < 0.5  # Should be near 0.1
+
+    def test_throughput_factor_reaches_1_after_duration(self):
+        """After slow_start_duration elapses, factor should be 1.0."""
+        strategy = ReconnectStrategy(slow_start_duration=0.05)
+        strategy.record_failure()
+        strategy.record_success()
+        time.sleep(0.06)
+        assert strategy.throughput_factor() == 1.0
+
+    def test_throughput_factor_1_when_no_recovery(self):
+        """Without prior failure, throughput should be 1.0."""
+        strategy = ReconnectStrategy()
+        assert strategy.throughput_factor() == 1.0
+
+    def test_inter_packet_delay_during_slow_start(self):
+        """inter_packet_delay should be positive during slow-start."""
+        strategy = ReconnectStrategy(slow_start_duration=1.0)
+        strategy.record_failure()
+        strategy.record_success()
+        delay = strategy.inter_packet_delay()
+        assert delay > 0.0
+
+    def test_inter_packet_delay_zero_at_full_throughput(self):
+        """inter_packet_delay should be 0 when not in slow-start."""
+        strategy = ReconnectStrategy()
+        assert strategy.inter_packet_delay() == 0.0
+
+    def test_reset_clears_slow_start(self):
+        """reset() should clear slow-start state."""
+        strategy = ReconnectStrategy(slow_start_duration=60.0)
+        strategy.record_failure()
+        strategy.record_success()
+        assert strategy.throughput_factor() < 1.0
+        strategy.reset()
+        assert strategy.throughput_factor() == 1.0

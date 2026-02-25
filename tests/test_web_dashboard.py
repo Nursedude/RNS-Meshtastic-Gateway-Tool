@@ -114,3 +114,29 @@ class TestSecurityHeaders:
         with self._mock_all_checks():
             response = flask_client.get('/')
             assert response.headers.get('X-Frame-Options') == 'DENY'
+
+
+class TestDashboardContent:
+    """Verify dashboard template renders expected data."""
+
+    def test_config_values_in_html(self, flask_client):
+        """Dashboard should display gateway config values."""
+        with patch('src.monitoring.web_dashboard.load_config', return_value={
+            "gateway": {"name": "MyTestNode", "port": "/dev/ttyACM0",
+                        "connection_type": "serial", "bitrate": 500},
+        }), \
+             patch('src.monitoring.web_dashboard.check_rns_lib', return_value=(True, "0.7.4")), \
+             patch('src.monitoring.web_dashboard.check_meshtastic_lib', return_value=(True, "2.3.0")), \
+             patch('src.monitoring.web_dashboard.check_serial_ports', return_value=["/dev/ttyACM0"]), \
+             patch('src.monitoring.web_dashboard.check_rnsd_status', return_value=(False, "not running")), \
+             patch('src.monitoring.web_dashboard.check_meshtasticd_status', return_value=(False, "not running")), \
+             patch('src.monitoring.web_dashboard.check_rns_udp_port', return_value=(False, "not in use")):
+
+            response = flask_client.get('/')
+            assert b'MyTestNode' in response.data
+            assert b'/dev/ttyACM0' in response.data
+
+    def test_404_response(self, flask_client):
+        """Non-existent routes should return 404."""
+        response = flask_client.get('/nonexistent')
+        assert response.status_code == 404

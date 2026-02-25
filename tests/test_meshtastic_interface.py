@@ -1,5 +1,6 @@
 """Tests for src/Meshtastic_Interface.py — RNS interface driver."""
 import sys
+import time
 from unittest.mock import patch, MagicMock
 
 import pytest
@@ -42,6 +43,11 @@ def _clear_cached_modules():
     for key in list(sys.modules):
         if 'Meshtastic_Interface' in key:
             del sys.modules[key]
+
+
+def _no_features():
+    """Config dict with reliability features disabled for isolated unit tests."""
+    return {"features": {"circuit_breaker": False, "tx_queue": False}}
 
 
 @pytest.fixture
@@ -127,7 +133,10 @@ class TestProcessIncoming:
         with patch.dict('sys.modules', mocks):
             _clear_cached_modules()
             from src.Meshtastic_Interface import MeshtasticInterface
-            config = {"connection_type": "tcp", "host": "localhost", "tcp_port": 4403}
+            config = {
+                "connection_type": "tcp", "host": "localhost", "tcp_port": 4403,
+                "features": {"circuit_breaker": False, "tx_queue": False},
+            }
             iface = MeshtasticInterface(mock_owner, "Test", config=config)
 
             data = b'\xAA\xBB\xCC'
@@ -144,7 +153,7 @@ class TestProcessIncoming:
         with patch.dict('sys.modules', mocks):
             _clear_cached_modules()
             from src.Meshtastic_Interface import MeshtasticInterface
-            iface = MeshtasticInterface(mock_owner, "Test", config={})
+            iface = MeshtasticInterface(mock_owner, "Test", config=_no_features())
 
             assert iface.online is False
             iface.process_incoming(b'\x01\x02')
@@ -207,3 +216,183 @@ class TestDetach:
             iface.interface.close.assert_called_once()
             assert iface.detached is True
             assert iface.online is False
+
+
+class TestTransmitErrors:
+    def test_sendData_exception_increments_tx_errors(self, mock_owner):
+        """When sendData raises, tx_errors should increment."""
+        mocks = _build_mocks()
+
+        with patch.dict('sys.modules', mocks):
+            _clear_cached_modules()
+            from src.Meshtastic_Interface import MeshtasticInterface
+            config = {
+                "connection_type": "tcp", "host": "localhost", "tcp_port": 4403,
+                "features": {"circuit_breaker": False, "tx_queue": False},
+            }
+            iface = MeshtasticInterface(mock_owner, "Test", config=config)
+            iface.interface.sendData.side_effect = OSError("radio dead")
+
+            iface.process_incoming(b'\x01\x02')
+            assert iface.tx_errors == 1
+
+    def test_oversized_message_still_sent(self, mock_owner):
+        """Oversized messages are warned but still attempted."""
+        mocks = _build_mocks()
+
+        with patch.dict('sys.modules', mocks):
+            _clear_cached_modules()
+            from src.Meshtastic_Interface import MeshtasticInterface
+            config = {
+                "connection_type": "tcp", "host": "localhost", "tcp_port": 4403,
+                "features": {"circuit_breaker": False, "tx_queue": False},
+            }
+            iface = MeshtasticInterface(mock_owner, "Test", config=config)
+            big_data = b'\x00' * 300
+            iface.process_incoming(big_data)
+            iface.interface.sendData.assert_called_once()
+            assert iface.txb == 300
+
+
+class TestProcessOutgoing:
+    def test_delegates_to_process_incoming(self, mock_owner):
+        """process_outgoing should delegate to process_incoming."""
+        mocks = _build_mocks()
+
+        with patch.dict('sys.modules', mocks):
+            _clear_cached_modules()
+            from src.Meshtastic_Interface import MeshtasticInterface
+            config = {
+                "connection_type": "tcp", "host": "localhost", "tcp_port": 4403,
+                "features": {"circuit_breaker": False, "tx_queue": False},
+            }
+            iface = MeshtasticInterface(mock_owner, "Test", config=config)
+            data = b'\xAA'
+            iface.process_outgoing(data)
+            iface.interface.sendData.assert_called_once_with(data, destinationId='^all')
+
+
+class TestStrRepr:
+    def test_str(self, mock_owner):
+        mocks = _build_mocks()
+        mocks['meshtastic.serial_interface'].SerialInterface.side_effect = OSError("No device")
+
+        with patch.dict('sys.modules', mocks):
+            _clear_cached_modules()
+            from src.Meshtastic_Interface import MeshtasticInterface
+            iface = MeshtasticInterface(mock_owner, "Test", config=_no_features())
+            s = str(iface)
+            assert "Meshtastic Radio" in s
+            assert "serial" in s
+
+    def test_repr(self, mock_owner):
+        mocks = _build_mocks()
+        mocks['meshtastic.serial_interface'].SerialInterface.side_effect = OSError("No device")
+
+        with patch.dict('sys.modules', mocks):
+            _clear_cached_modules()
+            from src.Meshtastic_Interface import MeshtasticInterface
+            iface = MeshtasticInterface(mock_owner, "Test", config=_no_features())
+            r = repr(iface)
+            assert "MeshtasticInterface" in r
+            assert "name='Test'" in r
+
+
+class TestHealthCheck:
+    def test_healthy_when_interface_exists(self, mock_owner):
+        mocks = _build_mocks()
+
+        with patch.dict('sys.modules', mocks):
+            _clear_cached_modules()
+            from src.Meshtastic_Interface import MeshtasticInterface
+            config = {
+                "connection_type": "tcp", "host": "localhost", "tcp_port": 4403,
+                "features": {"circuit_breaker": False, "tx_queue": False},
+            }
+            iface = MeshtasticInterface(mock_owner, "Test", config=config)
+            assert iface.health_check() is True
+
+    def test_unhealthy_when_interface_is_none(self, mock_owner):
+        mocks = _build_mocks()
+        mocks['meshtastic.serial_interface'].SerialInterface.side_effect = OSError("No device")
+
+        with patch.dict('sys.modules', mocks):
+            _clear_cached_modules()
+            from src.Meshtastic_Interface import MeshtasticInterface
+            iface = MeshtasticInterface(mock_owner, "Test", config=_no_features())
+            assert iface.health_check() is False
+
+    def test_unhealthy_when_circuit_breaker_open(self, mock_owner):
+        mocks = _build_mocks()
+
+        with patch.dict('sys.modules', mocks):
+            _clear_cached_modules()
+            from src.Meshtastic_Interface import MeshtasticInterface
+            config = {
+                "connection_type": "tcp", "host": "localhost", "tcp_port": 4403,
+                "features": {"circuit_breaker": True, "tx_queue": False},
+            }
+            iface = MeshtasticInterface(mock_owner, "Test", config=config)
+            # Trip the circuit breaker
+            for _ in range(5):
+                iface._circuit_breaker.record_failure()
+            assert iface.health_check() is False
+
+
+class TestMetrics:
+    def test_metrics_returns_dict(self, mock_owner):
+        mocks = _build_mocks()
+
+        with patch.dict('sys.modules', mocks):
+            _clear_cached_modules()
+            from src.Meshtastic_Interface import MeshtasticInterface
+            config = {"connection_type": "tcp", "host": "localhost", "tcp_port": 4403}
+            iface = MeshtasticInterface(mock_owner, "Test", config=config)
+            m = iface.metrics
+            assert isinstance(m, dict)
+            assert "tx_packets" in m
+            assert "rx_packets" in m
+            assert "tx_bytes" in m
+            assert "circuit_breaker_state" in m
+            assert "tx_queue_pending" in m
+
+
+class TestCircuitBreakerIntegration:
+    def test_circuit_breaker_blocks_tx_when_open(self, mock_owner):
+        """When circuit breaker is OPEN, process_incoming should not send."""
+        mocks = _build_mocks()
+
+        with patch.dict('sys.modules', mocks):
+            _clear_cached_modules()
+            from src.Meshtastic_Interface import MeshtasticInterface
+            config = {
+                "connection_type": "tcp", "host": "localhost", "tcp_port": 4403,
+                "features": {"circuit_breaker": True, "tx_queue": False},
+            }
+            iface = MeshtasticInterface(mock_owner, "Test", config=config)
+            # Trip the breaker
+            for _ in range(5):
+                iface._circuit_breaker.record_failure()
+
+            iface.process_incoming(b'\x01')
+            iface.interface.sendData.assert_not_called()
+
+    def test_reconnect_resets_circuit_breaker(self, mock_owner):
+        """Reconnect should reset the circuit breaker."""
+        mocks = _build_mocks()
+
+        with patch.dict('sys.modules', mocks):
+            _clear_cached_modules()
+            from src.Meshtastic_Interface import MeshtasticInterface
+            from src.utils.circuit_breaker import State
+            config = {
+                "connection_type": "tcp", "host": "localhost", "tcp_port": 4403,
+                "features": {"circuit_breaker": True, "tx_queue": False},
+            }
+            iface = MeshtasticInterface(mock_owner, "Test", config=config)
+            for _ in range(5):
+                iface._circuit_breaker.record_failure()
+            assert iface._circuit_breaker.state is State.OPEN
+
+            iface.reconnect()
+            assert iface._circuit_breaker.state is State.CLOSED

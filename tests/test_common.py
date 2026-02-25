@@ -263,3 +263,35 @@ class TestCheckConfigPermissions:
         """Missing config file should not raise or warn."""
         warnings = check_config_permissions(str(tmp_path / "missing.json"))
         assert len(warnings) == 0
+
+
+class TestValidateConfigExtended:
+    """Additional config validation edge cases."""
+
+    def test_empty_features_is_valid(self):
+        cfg = {"features": {}}
+        assert validate_config(cfg) == []
+
+    def test_features_with_values_is_valid(self):
+        cfg = {"features": {"circuit_breaker": True, "tx_queue": False}}
+        assert validate_config(cfg) == []
+
+    def test_bitrate_zero_rejected(self):
+        cfg = {"gateway": {"bitrate": 0}}
+        warnings = validate_config(cfg)
+        assert any("bitrate" in w for w in warnings)
+
+    def test_bitrate_string_rejected(self):
+        cfg = {"gateway": {"bitrate": "fast"}}
+        warnings = validate_config(cfg)
+        assert any("bitrate" in w for w in warnings)
+
+    def test_dashboard_host_invalid(self):
+        cfg = {"dashboard": {"host": "-evil"}}
+        warnings = validate_config(cfg)
+        assert any("dashboard.host" in w for w in warnings)
+
+    def test_gateway_section_not_dict(self):
+        cfg = {"gateway": "not a dict"}
+        warnings = validate_config(cfg)
+        assert any("gateway section" in w for w in warnings)

@@ -33,16 +33,17 @@ _stop_event = threading.Event()
 
 
 def start_gateway():
-    setup_logging()
-
-    print("============================================================")
-    print(f"  SUPERVISOR NOC | RNS-MESHTASTIC GATEWAY v{__version__}")
-    print("============================================================")
-
     cfg = load_config()
     if not cfg:
         log.warning("Could not load %s. Using default settings.", CONFIG_PATH)
     gw_config = cfg.get("gateway", {})
+
+    # Structured logging opt-in (MeshForge pattern)
+    setup_logging(structured=gw_config.get("structured_logging", False))
+
+    print("============================================================")
+    print(f"  SUPERVISOR NOC | RNS-MESHTASTIC GATEWAY v{__version__}")
+    print("============================================================")
 
     # 1. Initialize Reticulum (pass configdir to avoid EADDRINUSE when rnsd is running)
     rns_configdir = gw_config.get("rns_configdir", None)
@@ -80,8 +81,8 @@ def start_gateway():
                 now = time.time()
                 if now - last_health_check >= HEALTH_CHECK_INTERVAL:
                     last_health_check = now
-                    if mesh_interface.interface is None:
-                        log.warning("[%s] Health check: interface lost", mesh_interface.name)
+                    if not mesh_interface.health_check():
+                        log.warning("[%s] Health check failed", mesh_interface.name)
                         mesh_interface.online = False
                         continue
 

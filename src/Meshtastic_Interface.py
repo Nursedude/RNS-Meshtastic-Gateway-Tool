@@ -52,6 +52,11 @@ class MeshtasticInterface(Interface):
     RNS Interface Driver for Meshtastic LoRa Radios.
     Bridges Reticulum packets over the Meshtastic Python API.
     Supports serial/USB and TCP (meshtasticd) connections.
+
+    Reliability features (adopted from MeshForge patterns):
+    - Circuit breaker: stops hammering a dead radio after N failures
+    - Transmit queue: decouples RNS thread from radio I/O
+    - Health check: active probe beyond just checking interface != None
     """
 
     # Meshtastic maximum payload size (bytes)
@@ -59,27 +64,39 @@ class MeshtasticInterface(Interface):
 
     def __init__(self, owner: Any, name: str, config: Optional[Dict[str, Any]] = None) -> None:
         # --- RNS COMPLIANCE SECTION ---
-        # These attributes are strictly required by RNS to prevent runtime crashes.
+        # These attributes are required by the RNS Interface base class and
+        # transport internals.  Even when unused by *this* driver, RNS core
+        # may read them during transport decisions, rnstatus display, or
+        # announce rate-limiting.  Removing any will cause AttributeError
+        # crashes at runtime.  See: RNS/Interfaces/Interface.py in the
+        # Reticulum source.
         self.owner = owner
         self.name = name
         self.online = False
-        self.IN = True
-        self.OUT = False
-        self.bitrate = 500  # Standard LoRa Bitrate proxy
-        self.rxb = 0        # Receive Byte Counter
-        self.txb = 0        # Transmit Byte Counter
-        self.rx_packets = 0  # Receive Packet Counter
-        self.tx_packets = 0  # Transmit Packet Counter
-        self.tx_errors = 0   # Transmit Error Counter
+        self.IN = True                  # Accept inbound traffic
+        self.OUT = False                # Outbound enabled after connect
+        self.bitrate = 500              # LoRa bitrate proxy (bps)
+        self.rxb = 0                    # Total received bytes
+        self.txb = 0                    # Total transmitted bytes
+        self.rx_packets = 0             # Received packet count
+        self.tx_packets = 0             # Transmitted packet count
+        self.tx_errors = 0              # Failed transmit count
         self.detached = False
 
-        # Required by RNS Interface base class
+        # RNS transport internals — required even if unused by this driver.
+        # ingress_control: RNS announce rate-limiting flag
+        # held_announces: Queued announces during rate-limiting
+        # rate_violation_occurred: Set by RNS when rate limit exceeded
+        # clients: Connection count for shared interfaces
+        # ia_freq_deque/oa_freq_deque: Announce frequency tracking
+        # announce_cap: Maximum announce rate (0 = unlimited)
+        # ifac_identity: Interface authentication identity
         self.ingress_control = False
         self.held_announces = []
         self.rate_violation_occurred = False
         self.clients = 0
-        self.ia_freq_deque = collections.deque(maxlen=100) # Inbound Frequency Log
-        self.oa_freq_deque = collections.deque(maxlen=100) # Outbound Frequency Log
+        self.ia_freq_deque = collections.deque(maxlen=100)
+        self.oa_freq_deque = collections.deque(maxlen=100)
         self.announce_cap = 0
         self.ifac_identity = None
 
@@ -94,6 +111,25 @@ class MeshtasticInterface(Interface):
         if config and config.get("connection_type"):
             self.connection_type = config["connection_type"]
 
+        # --- RELIABILITY: Circuit Breaker (MeshForge pattern) ---
+        features = (config or {}).get("features", {}) if isinstance(config, dict) else {}
+        self._use_circuit_breaker = features.get("circuit_breaker", True)
+        self._use_tx_queue = features.get("tx_queue", True)
+
+        self._circuit_breaker = None
+        if self._use_circuit_breaker:
+            from src.utils.circuit_breaker import CircuitBreaker
+            self._circuit_breaker = CircuitBreaker()
+
+        # --- RELIABILITY: Transmit Queue (MeshForge pattern) ---
+        self._tx_queue = None
+        if self._use_tx_queue:
+            from src.utils.tx_queue import TxQueue
+            self._tx_queue = TxQueue(
+                send_fn=self._do_send,
+                maxsize=32,
+            )
+
         # --- HARDWARE CONFIGURATION ---
         self.interface = None
 
@@ -101,6 +137,10 @@ class MeshtasticInterface(Interface):
             self._init_tcp(owner, name, config or {})
         else:
             self._init_serial(owner, name, config or {})
+
+        # Start TX queue after connection is established
+        if self._tx_queue and self.online:
+            self._tx_queue.start()
 
     def _init_serial(self, owner: Any, name: str, config: Dict[str, Any]) -> None:
         """Initialize via serial/USB connection."""
@@ -173,6 +213,33 @@ class MeshtasticInterface(Interface):
         except (OSError, ConnectionError, ValueError) as e:
             log.error("[%s] TCP Error: %s", self.name, e)
 
+    def _do_send(self, data: bytes) -> None:
+        """Low-level send: transmit one packet to the radio hardware.
+
+        Called by the TX queue drain thread (or directly if queue is disabled).
+        Integrates with the circuit breaker to track success/failure.
+        """
+        try:
+            if len(data) > self.MESHTASTIC_MAX_PAYLOAD:
+                log.warning("[%s] Payload %d bytes exceeds Meshtastic limit (%d). "
+                            "Radio may fragment or drop.", self.name, len(data),
+                            self.MESHTASTIC_MAX_PAYLOAD)
+
+            log.debug("[%s] >>> TRANSMITTING %d BYTES TO MESH...", self.name, len(data))
+            self.txb += len(data)
+            self.tx_packets += 1
+
+            self.interface.sendData(data, destinationId='^all')
+
+            log.debug("[%s] >>> SENT TO RADIO HARDWARE.", self.name)
+            if self._circuit_breaker:
+                self._circuit_breaker.record_success()
+        except (OSError, AttributeError, TypeError) as e:
+            self.tx_errors += 1
+            if self._circuit_breaker:
+                self._circuit_breaker.record_failure()
+            log.error("[%s] Transmit Error: %s", self.name, e)
+
     def process_incoming(self, data: bytes) -> None:
         """Handle data flowing FROM Reticulum TO the Mesh Radio (TX).
 
@@ -181,25 +248,20 @@ class MeshtasticInterface(Interface):
         RNS transport layer — i.e., data that needs to be *transmitted*
         out over the physical medium (the mesh radio).
         """
-        if self.online and self.interface:
-            try:
-                if len(data) > self.MESHTASTIC_MAX_PAYLOAD:
-                    log.warning("[%s] Payload %d bytes exceeds Meshtastic limit (%d). "
-                                "Radio may fragment or drop.", self.name, len(data),
-                                self.MESHTASTIC_MAX_PAYLOAD)
+        if not (self.online and self.interface):
+            return
 
-                log.debug("[%s] >>> TRANSMITTING %d BYTES TO MESH...", self.name, len(data))
-                self.txb += len(data)
-                self.tx_packets += 1
+        # Circuit breaker: reject if breaker is open (radio unresponsive)
+        if self._circuit_breaker and not self._circuit_breaker.allow_request():
+            log.warning("[%s] Circuit breaker OPEN — TX blocked (radio unresponsive)",
+                        self.name)
+            return
 
-                # FORCE BROADCAST: destinationId='^all' ensures the packet leaves the radio.
-                # In the future, we can map RNS Hashes to Meshtastic Node IDs here.
-                self.interface.sendData(data, destinationId='^all')
-
-                log.debug("[%s] >>> SENT TO RADIO HARDWARE.", self.name)
-            except (OSError, AttributeError, TypeError) as e:
-                self.tx_errors += 1
-                log.error("[%s] Transmit Error: %s", self.name, e)
+        # TX queue: enqueue for async drain, or send directly
+        if self._tx_queue:
+            self._tx_queue.enqueue(data)
+        else:
+            self._do_send(data)
 
     def on_receive(self, packet: Dict[str, Any], interface: Any) -> None:
         """Handle data flowing FROM the Mesh Radio TO Reticulum (RX).
@@ -228,12 +290,47 @@ class MeshtasticInterface(Interface):
         """
         self.process_incoming(data)
 
+    def health_check(self) -> bool:
+        """Active health probe — goes beyond checking interface != None.
+
+        Checks:
+        1. Interface object exists
+        2. Circuit breaker is not OPEN (too many consecutive failures)
+        3. For TCP: underlying socket is still connected
+        """
+        if self.interface is None:
+            return False
+
+        # Circuit breaker tripped → not healthy
+        if self._circuit_breaker and not self._circuit_breaker.allow_request():
+            from src.utils.circuit_breaker import State
+            if self._circuit_breaker.state is State.OPEN:
+                log.warning("[%s] Health check: circuit breaker OPEN (%d failures)",
+                            self.name, self._circuit_breaker.failures)
+                return False
+
+        # TCP: check socket liveness
+        if self.connection_type == "tcp":
+            try:
+                sock = getattr(self.interface, '_socket', None)
+                if sock and sock.fileno() == -1:
+                    log.warning("[%s] Health check: TCP socket closed", self.name)
+                    return False
+            except (OSError, AttributeError):
+                pass
+
+        return True
+
     def reconnect(self) -> bool:
         """
         Attempt to reconnect after a connection loss.
         Closes existing interface cleanly, then re-initializes.
         """
         log.info("[%s] Attempting reconnect...", self.name)
+
+        # Stop TX queue before teardown
+        if self._tx_queue:
+            self._tx_queue.stop()
 
         # Unsubscribe to prevent duplicate handlers on re-init
         try:
@@ -252,6 +349,10 @@ class MeshtasticInterface(Interface):
         self.online = False
         self.OUT = False
 
+        # Reset circuit breaker for fresh connection
+        if self._circuit_breaker:
+            self._circuit_breaker.reset()
+
         # Re-initialize based on connection type
         config = {}
         if self.connection_type == "tcp":
@@ -261,12 +362,20 @@ class MeshtasticInterface(Interface):
             config = {"port": self.port, "connection_type": "serial"}
             self._init_serial(self.owner, self.name, config)
 
+        # Restart TX queue if connection succeeded
+        if self._tx_queue and self.online:
+            self._tx_queue.start()
+
         return self.online
 
     def detach(self) -> None:
         """
         Clean shutdown to release the connection.
         """
+        # Stop TX queue
+        if self._tx_queue:
+            self._tx_queue.stop()
+
         if self.interface:
             try:
                 self.interface.close()
@@ -275,6 +384,25 @@ class MeshtasticInterface(Interface):
         self.detached = True
         self.online = False
         log.info("[%s] Interface Detached.", self.name)
+
+    @property
+    def metrics(self) -> dict:
+        """Snapshot of interface metrics for dashboard/monitoring integration."""
+        m = {
+            "tx_packets": self.tx_packets,
+            "rx_packets": self.rx_packets,
+            "tx_bytes": self.txb,
+            "rx_bytes": self.rxb,
+            "tx_errors": self.tx_errors,
+            "online": self.online,
+        }
+        if self._tx_queue:
+            m["tx_queue_pending"] = self._tx_queue.pending
+            m["tx_queue_dropped"] = self._tx_queue.dropped
+        if self._circuit_breaker:
+            m["circuit_breaker_state"] = self._circuit_breaker.state.value
+            m["circuit_breaker_failures"] = self._circuit_breaker.failures
+        return m
 
     def __str__(self):
         return f"Meshtastic Radio ({self.connection_type}: {self.port})"

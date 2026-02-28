@@ -62,7 +62,14 @@ class MeshtasticInterface(Interface):
     # Meshtastic maximum payload size (bytes)
     MESHTASTIC_MAX_PAYLOAD = 228
 
-    def __init__(self, owner: Any, name: str, config: Optional[Dict[str, Any]] = None) -> None:
+    def __init__(
+        self,
+        owner: Any,
+        name: str,
+        config: Optional[Dict[str, Any]] = None,
+        bridge_health=None,
+        inter_packet_delay_fn=None,
+    ) -> None:
         # --- RNS COMPLIANCE SECTION ---
         # These attributes are required by the RNS Interface base class and
         # transport internals.  Even when unused by *this* driver, RNS core
@@ -111,6 +118,10 @@ class MeshtasticInterface(Interface):
         if config and config.get("connection_type"):
             self.connection_type = config["connection_type"]
 
+        # --- RELIABILITY: Bridge Health Monitor (MeshForge pattern) ---
+        self._bridge_health = bridge_health  # Optional BridgeHealthMonitor
+        self._inter_packet_delay_fn = inter_packet_delay_fn  # Optional slow-start
+
         # --- RELIABILITY: Circuit Breaker (MeshForge pattern) ---
         features = (config or {}).get("features", {}) if isinstance(config, dict) else {}
         self._use_circuit_breaker = features.get("circuit_breaker", True)
@@ -128,6 +139,7 @@ class MeshtasticInterface(Interface):
             self._tx_queue = TxQueue(
                 send_fn=self._do_send,
                 maxsize=32,
+                inter_packet_delay_fn=self._inter_packet_delay_fn,
             )
 
         # --- HARDWARE CONFIGURATION ---
@@ -158,6 +170,11 @@ class MeshtasticInterface(Interface):
             self.port = _default_serial_port()
 
         log.info("[%s] Initializing serial on %s...", self.name, self.port)
+
+        # Pre-flight: verify device exists (MeshForge startup_checks pattern)
+        if not os.path.exists(self.port):
+            log.warning("[%s] Serial device %s not found (pre-flight check)",
+                        self.name, self.port)
 
         if not HAS_MESH_LIB:
             log.critical("[%s] 'meshtastic' python library not found!", self.name)
@@ -191,6 +208,12 @@ class MeshtasticInterface(Interface):
             return
 
         log.info("[%s] Initializing TCP on %s:%s...", self.name, self.host, self.tcp_port)
+
+        # Pre-flight: check if meshtasticd port is listening
+        from src.utils.service_check import check_tcp_port
+        tcp_ok, tcp_detail = check_tcp_port(self.tcp_port, self.host)
+        if not tcp_ok:
+            log.warning("[%s] TCP pre-flight: %s", self.name, tcp_detail)
 
         if not HAS_MESH_LIB:
             log.critical("[%s] 'meshtastic' python library not found!", self.name)
@@ -234,10 +257,15 @@ class MeshtasticInterface(Interface):
             log.debug("[%s] >>> SENT TO RADIO HARDWARE.", self.name)
             if self._circuit_breaker:
                 self._circuit_breaker.record_success()
+            if self._bridge_health:
+                self._bridge_health.record_message_sent("rns_to_mesh")
         except (OSError, AttributeError, TypeError) as e:
             self.tx_errors += 1
             if self._circuit_breaker:
                 self._circuit_breaker.record_failure()
+            if self._bridge_health:
+                self._bridge_health.record_message_failed("rns_to_mesh")
+                self._bridge_health.record_error("meshtastic", e)
             log.error("[%s] Transmit Error: %s", self.name, e)
 
     def process_incoming(self, data: bytes) -> None:
@@ -275,6 +303,8 @@ class MeshtasticInterface(Interface):
                 payload = packet['decoded']['payload']
                 self.rxb += len(payload)
                 self.rx_packets += 1
+                if self._bridge_health:
+                    self._bridge_health.record_message_sent("mesh_to_rns")
                 # Pass data up to the RNS Core
                 self.owner.inbound(payload, self)
         except (KeyError, TypeError, AttributeError, ValueError) as e:
@@ -349,6 +379,9 @@ class MeshtasticInterface(Interface):
         self.online = False
         self.OUT = False
 
+        if self._bridge_health:
+            self._bridge_health.record_connection_event("meshtastic", "disconnected")
+
         # Reset circuit breaker for fresh connection
         if self._circuit_breaker:
             self._circuit_breaker.reset()
@@ -365,6 +398,9 @@ class MeshtasticInterface(Interface):
         # Restart TX queue if connection succeeded
         if self._tx_queue and self.online:
             self._tx_queue.start()
+
+        if self._bridge_health and self.online:
+            self._bridge_health.record_connection_event("meshtastic", "connected")
 
         return self.online
 

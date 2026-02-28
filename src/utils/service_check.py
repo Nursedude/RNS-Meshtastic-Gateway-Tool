@@ -1,8 +1,12 @@
 """
 Environment and dependency checking utilities.
 Used by both terminal and web dashboards.
+
+Includes TCP/serial pre-flight probes adopted from MeshForge's
+service_check.py and startup_checks.py patterns.
 """
 import os
+import socket
 
 
 def check_rns_lib():
@@ -76,7 +80,11 @@ def check_meshtasticd_status():
         )
         state = result.stdout.strip()
         if state == 'active':
-            return True, "active (systemd)"
+            # Verify port is actually listening (catches zombies)
+            port_ok, _ = check_tcp_port(4403)
+            if port_ok:
+                return True, "active (systemd) [port 4403 listening]"
+            return True, "active (systemd) [WARNING: port 4403 not listening]"
         return False, f"{state} (systemd)"
     except FileNotFoundError:
         pass  # systemctl not available, fall through
@@ -123,7 +131,6 @@ def check_rns_udp_port(port=37428):
             pass  # fall through to socket probe
 
     # Fallback: socket probe (non-Linux or /proc unavailable)
-    import socket
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
         sock.bind(('127.0.0.1', port))
@@ -132,3 +139,55 @@ def check_rns_udp_port(port=37428):
         return True, f"UDP :{port} in use"
     finally:
         sock.close()
+
+
+# ── Pre-flight probes (MeshForge patterns) ──────────────────
+def check_tcp_port(port, host="127.0.0.1", timeout=2):
+    """Check if a TCP port is accepting connections.
+
+    Returns (listening: bool, detail: str).
+    Catches zombie processes where systemctl says 'active' but the
+    port is not actually bound.
+    """
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.settimeout(timeout)
+            result = sock.connect_ex((host, port))
+            if result == 0:
+                return True, "TCP :%d listening" % port
+            return False, "TCP :%d not listening" % port
+    except OSError as e:
+        return False, "TCP :%d check failed: %s" % (port, e)
+
+
+def check_serial_device(path):
+    """Verify a serial device exists and is accessible.
+
+    Returns (ok: bool, detail: str).
+    """
+    if not os.path.exists(path):
+        return False, "device not found: %s" % path
+    if not os.access(path, os.R_OK | os.W_OK):
+        return False, "device not readable/writable: %s (check permissions)" % path
+    return True, "device OK: %s" % path
+
+
+def check_serial_ports_detailed():
+    """List serial ports with vendor/model info.
+
+    Returns list of dicts with keys: device, description, vendor, model.
+    Falls back to basic list if pyserial doesn't expose detailed info.
+    """
+    try:
+        from serial.tools.list_ports import comports
+        result = []
+        for p in comports():
+            result.append({
+                "device": p.device,
+                "description": getattr(p, "description", ""),
+                "vendor": getattr(p, "manufacturer", ""),
+                "model": getattr(p, "product", ""),
+            })
+        return result if result else []
+    except ImportError:
+        return []

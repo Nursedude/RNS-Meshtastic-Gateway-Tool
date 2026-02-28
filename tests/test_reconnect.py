@@ -169,3 +169,72 @@ class TestSlowStart:
         assert strategy.throughput_factor() < 1.0
         strategy.reset()
         assert strategy.throughput_factor() == 1.0
+
+
+class TestExecuteWithRetry:
+    def test_succeeds_first_try(self):
+        strategy = ReconnectStrategy(initial_delay=0.01, jitter=0.0)
+        result = strategy.execute_with_retry(lambda: 42)
+        assert result == 42
+
+    def test_fails_then_succeeds(self):
+        calls = [0]
+
+        def flaky():
+            calls[0] += 1
+            if calls[0] < 3:
+                raise ConnectionError("nope")
+            return "ok"
+
+        strategy = ReconnectStrategy(
+            initial_delay=0.01, max_delay=0.01, jitter=0.0, max_attempts=5,
+        )
+        result = strategy.execute_with_retry(flaky)
+        assert result == "ok"
+        assert calls[0] == 3
+
+    def test_exhausts_retries(self):
+        strategy = ReconnectStrategy(
+            initial_delay=0.01, max_delay=0.01, jitter=0.0, max_attempts=2,
+        )
+        with pytest.raises(ConnectionError, match="nope"):
+            strategy.execute_with_retry(lambda: (_ for _ in ()).throw(ConnectionError("nope")))
+
+    def test_interrupted_by_stop_event(self):
+        stop = threading.Event()
+        stop.set()
+        strategy = ReconnectStrategy(max_attempts=10)
+        with pytest.raises(ConnectionError, match="interrupted"):
+            strategy.execute_with_retry(
+                lambda: (_ for _ in ()).throw(RuntimeError("fail")),
+                stop_event=stop,
+            )
+
+    def test_on_success_callback(self):
+        results = []
+        strategy = ReconnectStrategy(initial_delay=0.01, jitter=0.0)
+        strategy.execute_with_retry(
+            lambda: "val",
+            on_success=lambda r: results.append(r),
+        )
+        assert results == ["val"]
+
+    def test_on_failure_callback(self):
+        errors = []
+        calls = [0]
+
+        def flaky():
+            calls[0] += 1
+            if calls[0] < 2:
+                raise ValueError("bad")
+            return "ok"
+
+        strategy = ReconnectStrategy(
+            initial_delay=0.01, max_delay=0.01, jitter=0.0, max_attempts=5,
+        )
+        strategy.execute_with_retry(
+            flaky,
+            on_failure=lambda e: errors.append(str(e)),
+        )
+        assert len(errors) == 1
+        assert "bad" in errors[0]

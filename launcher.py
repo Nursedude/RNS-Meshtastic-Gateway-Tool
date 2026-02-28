@@ -4,7 +4,6 @@ import os
 import signal
 import sys
 import threading
-import time
 
 # Add project root and src folder to path
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -15,6 +14,9 @@ from version import __version__
 from src.utils.common import CONFIG_PATH, load_config
 from src.utils.log import setup_logging
 from src.utils.reconnect import ReconnectStrategy
+from src.utils.bridge_health import BridgeHealthMonitor
+from src.utils.health_probe import ActiveHealthProbe, HealthResult
+from src.utils.threads import shutdown_all_threads
 
 log = logging.getLogger("gateway")
 
@@ -51,13 +53,38 @@ def start_gateway():
 
     log.info("Loading Interface 'Meshtastic Radio'...")
 
-    # 2. Instantiate the Driver
-    mesh_interface = MeshtasticInterface(rns_connection, "Meshtastic Radio", config=gw_config)
+    # 2. Create reliability components before driver (MeshForge pattern)
+    strategy = ReconnectStrategy.for_meshtastic()
+    bridge_health = BridgeHealthMonitor()
 
-    if not mesh_interface.online:
+    # Instantiate the Driver with bridge health + slow-start wiring
+    mesh_interface = MeshtasticInterface(
+        rns_connection, "Meshtastic Radio",
+        config=gw_config,
+        bridge_health=bridge_health,
+        inter_packet_delay_fn=strategy.inter_packet_delay,
+    )
+
+    if mesh_interface.online:
+        bridge_health.record_connection_event("meshtastic", "connected")
+    else:
         log.warning("Initial connection failed. Will retry...")
 
-    # 3. Signal handling for clean systemd/SIGTERM shutdown
+    # 3. Active health probe with hysteresis (MeshForge pattern)
+    #    3 consecutive failures before marking unhealthy (prevents false positives)
+    health_probe = ActiveHealthProbe(
+        interval=HEALTH_CHECK_INTERVAL, fails=3, passes=2,
+    )
+    health_probe.register_check(
+        "meshtastic",
+        lambda: HealthResult(
+            healthy=mesh_interface.health_check(),
+            reason="interface_health_check",
+        ),
+    )
+    health_probe.start()
+
+    # Signal handling for clean systemd/SIGTERM shutdown
     def _handle_signal(signum, frame):
         sig_name = signal.Signals(signum).name
         log.info("Received %s — shutting down gateway...", sig_name)
@@ -67,23 +94,23 @@ def start_gateway():
     if hasattr(signal, 'SIGHUP'):
         signal.signal(signal.SIGHUP, _handle_signal)
 
-    # 4. Main loop with health check and auto-reconnect
-    strategy = ReconnectStrategy.for_meshtastic()
-    last_health_check = 0.0
-
+    # 5. Main loop with health probe and auto-reconnect
     try:
         while not _stop_event.is_set():
             if mesh_interface.online:
                 # Connection is healthy — reset attempt counter
                 strategy.record_success()
 
-                # Periodic health check: verify the interface is still responsive
-                now = time.time()
-                if now - last_health_check >= HEALTH_CHECK_INTERVAL:
-                    last_health_check = now
-                    if not mesh_interface.health_check():
-                        log.warning("[%s] Health check failed", mesh_interface.name)
+                # Health probe runs in background with hysteresis.
+                # Only mark offline if probe confirms sustained failure.
+                if not health_probe.is_healthy("meshtastic"):
+                    status = health_probe.get_status("meshtastic")
+                    if status and status["state"] == "unhealthy":
+                        log.warning("[%s] Health probe: UNHEALTHY — marking offline",
+                                    mesh_interface.name)
                         mesh_interface.online = False
+                        bridge_health.record_connection_event(
+                            "meshtastic", "error", detail="health probe unhealthy")
                         continue
 
                 # Interruptible sleep — wakes immediately on SIGTERM
@@ -115,8 +142,10 @@ def start_gateway():
     except KeyboardInterrupt:
         log.info("Shutting down gateway...")
 
-    # Clean shutdown
+    # Clean shutdown (MeshForge pattern: stop probes → detach → shutdown threads)
+    health_probe.stop()
     mesh_interface.detach()
+    shutdown_all_threads()
     sys.exit(0)
 
 if __name__ == "__main__":

@@ -16,6 +16,17 @@ from src.ui.widgets import (
     box_top, box_mid, box_bot, box_row, box_section,
 )
 from src.utils.common import CONFIG_PATH, NOMAD_CONFIG, RNS_CONFIG_FILE, load_config, validate_port
+from src.utils.service_check import check_rnsd_status, check_meshtasticd_status
+
+
+# ── Service Status ───────────────────────────────────────────
+def _service_status_line():
+    """Quick service status for banner display (MeshForge StatusBar pattern)."""
+    rnsd_ok, _ = check_rnsd_status()
+    meshd_ok, _ = check_meshtasticd_status()
+    rnsd_tag = f"{C.GRN}●{C.RST}" if rnsd_ok else f"{C.DIM}○{C.RST}"
+    meshd_tag = f"{C.GRN}●{C.RST}" if meshd_ok else f"{C.DIM}○{C.RST}"
+    return f"rnsd {rnsd_tag}  meshtasticd {meshd_tag}"
 
 
 # ── Cross-Platform Helpers ───────────────────────────────────
@@ -24,7 +35,7 @@ def clear_screen():
     if os.name == 'nt':
         subprocess.run(['cmd', '/c', 'cls'], shell=False, timeout=5)
     else:
-        sys.stdout.write('\033[2J\033[H')
+        sys.stdout.write('\033[H\033[2J\033[3J')
         sys.stdout.flush()
 
 
@@ -126,6 +137,10 @@ def print_banner(cfg):
     print(box_row(
         f"{C.CYN}Radio:{C.RST} {C.WHT}{port}{C.RST}    "
         f"{C.CYN}Dashboard:{C.RST} {C.WHT}:{dash}{C.RST}",
+        w,
+    ))
+    print(box_row(
+        center(_service_status_line(), w - 4),
         w,
     ))
     print(box_bot(w))

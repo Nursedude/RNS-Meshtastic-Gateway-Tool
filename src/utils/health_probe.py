@@ -330,7 +330,7 @@ class ActiveHealthProbe:
             if sock:
                 try:
                     sock.close()
-                except Exception:
+                except Exception:  # noqa: S110
                     pass
 
     def check_systemd_service(self, service_name: str) -> HealthResult:

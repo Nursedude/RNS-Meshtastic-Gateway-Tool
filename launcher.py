@@ -4,7 +4,6 @@ import os
 import signal
 import sys
 import threading
-import time
 
 # Add project root and src folder to path
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))

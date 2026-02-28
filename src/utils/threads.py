@@ -110,7 +110,7 @@ class ThreadManager:
             log.info("Shutting down %d managed thread(s)...", count)
 
             # Signal all stop events first
-            for name, event in self._stop_events.items():
+            for _name, event in self._stop_events.items():
                 event.set()
 
             # Wait for threads to finish

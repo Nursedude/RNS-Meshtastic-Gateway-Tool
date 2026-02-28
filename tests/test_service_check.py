@@ -9,6 +9,9 @@ from src.utils.service_check import (
     check_rnsd_status,
     check_meshtasticd_status,
     check_rns_udp_port,
+    check_tcp_port,
+    check_serial_device,
+    check_serial_ports_detailed,
 )
 
 
@@ -127,9 +130,10 @@ class TestCheckRnsdStatus:
 
 class TestCheckMeshtasticdStatus:
     def test_running_via_systemctl(self):
-        """meshtasticd active via systemctl."""
+        """meshtasticd active via systemctl, port verification included."""
         mock_result = MagicMock(returncode=0, stdout="active\n")
-        with patch('subprocess.run', return_value=mock_result):
+        with patch('subprocess.run', return_value=mock_result), \
+             patch('src.utils.service_check.check_tcp_port', return_value=(True, "listening")):
             ok, info = check_meshtasticd_status()
             assert ok is True
             assert "active" in info
@@ -229,3 +233,68 @@ class TestCheckRnsUdpPort:
             ok, info = check_rns_udp_port()
             assert ok is False
             assert "not in use" in info
+
+
+class TestCheckTcpPort:
+    def test_port_listening(self):
+        """TCP port accepting connections."""
+        with patch('src.utils.service_check.socket.socket') as mock_cls:
+            mock_sock = MagicMock()
+            mock_sock.connect_ex.return_value = 0
+            mock_cls.return_value.__enter__ = lambda s: mock_sock
+            mock_cls.return_value.__exit__ = MagicMock(return_value=False)
+            ok, info = check_tcp_port(4403)
+            assert ok is True
+            assert "listening" in info
+
+    def test_port_not_listening(self):
+        """TCP port not accepting connections."""
+        with patch('src.utils.service_check.socket.socket') as mock_cls:
+            mock_sock = MagicMock()
+            mock_sock.connect_ex.return_value = 111  # ECONNREFUSED
+            mock_cls.return_value.__enter__ = lambda s: mock_sock
+            mock_cls.return_value.__exit__ = MagicMock(return_value=False)
+            ok, info = check_tcp_port(4403)
+            assert ok is False
+            assert "not listening" in info
+
+    def test_port_check_error(self):
+        """TCP port check raises OSError."""
+        with patch('src.utils.service_check.socket.socket') as mock_cls:
+            mock_cls.return_value.__enter__ = MagicMock(
+                side_effect=OSError("network error")
+            )
+            mock_cls.return_value.__exit__ = MagicMock(return_value=False)
+            ok, info = check_tcp_port(4403)
+            assert ok is False
+            assert "failed" in info
+
+
+class TestCheckSerialDevice:
+    def test_device_exists(self, tmp_path):
+        """Serial device path exists and is accessible."""
+        dev = tmp_path / "ttyUSB0"
+        dev.touch()
+        ok, info = check_serial_device(str(dev))
+        assert ok is True
+        assert "OK" in info
+
+    def test_device_missing(self, tmp_path):
+        """Serial device path does not exist."""
+        ok, info = check_serial_device(str(tmp_path / "nope"))
+        assert ok is False
+        assert "not found" in info
+
+
+class TestCheckSerialPortsDetailed:
+    def test_returns_list(self):
+        """Returns list of dicts even when empty."""
+        mock_lp = MagicMock()
+        mock_lp.comports.return_value = []
+        with patch.dict('sys.modules', {
+            'serial': MagicMock(),
+            'serial.tools': MagicMock(),
+            'serial.tools.list_ports': mock_lp,
+        }):
+            result = check_serial_ports_detailed()
+            assert isinstance(result, list)

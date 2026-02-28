@@ -117,6 +117,44 @@ class ReconnectStrategy:
         # Inverse: low factor → high delay
         return max(0.0, (1.0 - factor) * 1.0)
 
+    def execute_with_retry(self, fn, stop_event=None, on_success=None, on_failure=None):
+        """Execute *fn* with retry using this strategy's backoff.
+
+        Args:
+            fn:         Callable to attempt.  Must raise on failure.
+            stop_event: Optional ``threading.Event``; if set, abort early.
+            on_success: Optional ``callback(result)`` on first success.
+            on_failure: Optional ``callback(exception)`` on each failure.
+
+        Returns:
+            The return value of *fn()* on success.
+
+        Raises:
+            The last exception if retries are exhausted, or
+            ``ConnectionError`` if interrupted by *stop_event*.
+        """
+        _stop = stop_event or threading.Event()
+        last_exc = None
+        while self.should_retry():
+            if _stop.is_set():
+                break
+            try:
+                result = fn()
+                self.record_success()
+                if on_success:
+                    on_success(result)
+                return result
+            except Exception as exc:
+                last_exc = exc
+                self.record_failure()
+                if on_failure:
+                    on_failure(exc)
+                if self.should_retry():
+                    self.wait(_stop)
+        if last_exc:
+            raise last_exc
+        raise ConnectionError("Retry interrupted")
+
     def reset(self) -> None:
         """Explicitly reset the attempt counter and slow-start state."""
         self._attempts = 0

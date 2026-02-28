@@ -27,7 +27,7 @@ from src.utils.service_check import (
 
 # ── Render ───────────────────────────────────────────────────
 def render_dashboard():
-    sys.stdout.write('\033[2J\033[H')
+    sys.stdout.write('\033[H\033[2J\033[3J')
     sys.stdout.flush()
 
     w = min(cols() - 4, 66)

@@ -1,7 +1,9 @@
+import argparse
+import logging
 import os
-import sys
-import shutil
 import subprocess
+import shutil
+import sys
 import time
 import webbrowser
 
@@ -16,7 +18,10 @@ from src.ui.widgets import (
     box_top, box_mid, box_bot, box_row, box_section,
 )
 from src.utils.common import CONFIG_PATH, NOMAD_CONFIG, RNS_CONFIG_FILE, load_config, validate_port
+from src.utils.log import setup_logging, default_log_path, install_crash_handler
 from src.utils.service_check import check_rnsd_status, check_meshtasticd_status
+
+log = logging.getLogger("menu")
 
 
 # ── Service Status ───────────────────────────────────────────
@@ -80,26 +85,44 @@ def edit_file(path):
 
 
 def launch_detached(cmd_list):
-    """Launch a process detached from the current terminal (cross-platform)."""
+    """Launch a process detached from the current terminal (cross-platform).
+
+    Returns True if the process started successfully, False otherwise.
+    Uses MeshForge startup-verification pattern: sleep + poll to catch
+    immediate crashes (e.g. missing modules, bad config).
+    """
     try:
         if os.name == 'nt':
             # Windows: CREATE_NEW_CONSOLE flag
             CREATE_NEW_CONSOLE = 0x00000010
-            subprocess.Popen(cmd_list, creationflags=CREATE_NEW_CONSOLE)
+            proc = subprocess.Popen(cmd_list, creationflags=CREATE_NEW_CONSOLE)
         else:
             # POSIX: start_new_session detaches
-            subprocess.Popen(
+            proc = subprocess.Popen(
                 cmd_list,
                 start_new_session=True,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             )
+        # Verify process didn't crash immediately (MeshForge MF004 pattern)
+        time.sleep(1)
+        if proc.poll() is not None:
+            print(f"  {C.RED}  Process exited immediately (code {proc.returncode}){C.RST}")
+            log.warning("Detached process %s exited immediately (code %s)",
+                        cmd_list, proc.returncode)
+            time.sleep(2)
+            return False
+        return True
     except FileNotFoundError:
         print(f"  {C.RED}  Command not found: {cmd_list[0]}{C.RST}")
+        log.warning("Command not found: %s", cmd_list[0])
         time.sleep(2)
+        return False
     except OSError as e:
         print(f"  {C.RED}  Launch error: {e}{C.RST}")
+        log.exception("Launch error for %s", cmd_list)
         time.sleep(2)
+        return False
 
 
 def run_tool(cmd_list, cwd=None):
@@ -234,10 +257,50 @@ def main_menu():
         except KeyboardInterrupt:
             print(f"\n  {C.DIM}Goodbye.{C.RST}\n")
             sys.exit(0)
+        except FileNotFoundError as e:
+            log.exception("File not found")
+            print(f"\n  {C.RED}  File not found: {e}{C.RST}")
+            time.sleep(2)
+        except PermissionError as e:
+            log.exception("Permission denied")
+            print(f"\n  {C.RED}  Permission denied: {e}{C.RST}")
+            print(f"  {C.DIM}  Try running with sudo if this is a system file.{C.RST}")
+            time.sleep(2)
+        except subprocess.TimeoutExpired:
+            log.exception("Operation timed out")
+            print(f"\n  {C.YLW}  Operation timed out.{C.RST}")
+            time.sleep(2)
         except Exception as e:
+            log.exception("Unexpected error in menu")
             print(f"\n  {C.RED}  Error: {e}{C.RST}")
+            print(f"  {C.DIM}  (details logged to ~/.config/rns-gateway/logs/){C.RST}")
             time.sleep(2)
 
 
+def _parse_args(argv=None):
+    parser = argparse.ArgumentParser(
+        description="Supervisor NOC — Command Center for RNS-Meshtastic Gateway",
+    )
+    parser.add_argument(
+        "--version", action="version",
+        version=f"%(prog)s {VERSION}",
+    )
+    parser.add_argument(
+        "--debug", action="store_true",
+        help="Enable debug-level logging",
+    )
+    return parser.parse_args(argv)
+
+
 if __name__ == "__main__":
+    install_crash_handler()
+    args = _parse_args()
+    # TUI mode: suppress console logging to prevent whiptail/curses corruption
+    # (MeshForge industrial-strength TUI pattern — commit 259f22ee)
+    log_level = logging.DEBUG if args.debug else logging.INFO
+    setup_logging(
+        level=log_level,
+        log_file=default_log_path(),
+        console_level=logging.WARNING,
+    )
     main_menu()

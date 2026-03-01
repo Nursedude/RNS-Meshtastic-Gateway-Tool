@@ -9,7 +9,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
-from src.ui.menu import get_editor, get_python, clear_screen
+from src.ui.menu import get_editor, get_python, clear_screen, launch_detached, _parse_args
 
 
 class TestGetEditor:
@@ -66,3 +66,51 @@ class TestClearScreen:
              patch('subprocess.run') as mock_run:
             clear_screen()
             mock_run.assert_called_once()
+
+
+class TestLaunchDetached:
+    def test_returns_true_on_success(self):
+        """launch_detached should return True when process starts OK."""
+        mock_proc = MagicMock()
+        mock_proc.poll.return_value = None  # Still running
+        with patch('subprocess.Popen', return_value=mock_proc):
+            result = launch_detached([sys.executable, '-c', 'pass'])
+        assert result is True
+
+    def test_returns_false_on_immediate_exit(self):
+        """launch_detached should return False if process exits immediately."""
+        mock_proc = MagicMock()
+        mock_proc.poll.return_value = 1  # Exited with error
+        mock_proc.returncode = 1
+        with patch('subprocess.Popen', return_value=mock_proc):
+            result = launch_detached([sys.executable, '-c', 'import sys; sys.exit(1)'])
+        assert result is False
+
+    def test_returns_false_on_file_not_found(self):
+        """launch_detached should return False when command not found."""
+        with patch('subprocess.Popen', side_effect=FileNotFoundError):
+            result = launch_detached(['/nonexistent/binary'])
+        assert result is False
+
+    def test_returns_false_on_os_error(self):
+        """launch_detached should return False on OSError."""
+        with patch('subprocess.Popen', side_effect=OSError("test")):
+            result = launch_detached(['/some/binary'])
+        assert result is False
+
+
+class TestParseArgs:
+    def test_default_no_debug(self):
+        """With no args, debug should be False."""
+        args = _parse_args([])
+        assert args.debug is False
+
+    def test_debug_flag(self):
+        """--debug should set debug=True."""
+        args = _parse_args(['--debug'])
+        assert args.debug is True
+
+    def test_version_flag(self):
+        """--version should cause SystemExit."""
+        with pytest.raises(SystemExit):
+            _parse_args(['--version'])

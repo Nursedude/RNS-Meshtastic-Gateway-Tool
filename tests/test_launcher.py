@@ -169,3 +169,52 @@ class TestStopEvent:
         """Stop event should not be set on import."""
         launcher, _ = _import_launcher()
         assert not launcher._stop_event.is_set()
+
+
+class TestParseArgs:
+    def test_default_no_debug(self):
+        """With no args, debug should be False."""
+        launcher, _ = _import_launcher()
+        args = launcher._parse_args([])
+        assert args.debug is False
+
+    def test_debug_flag(self):
+        """--debug should set debug=True."""
+        launcher, _ = _import_launcher()
+        args = launcher._parse_args(['--debug'])
+        assert args.debug is True
+
+    def test_version_flag(self):
+        """--version should cause SystemExit."""
+        launcher, _ = _import_launcher()
+        with pytest.raises(SystemExit):
+            launcher._parse_args(['--version'])
+
+
+class TestStartGatewayDebug:
+    def test_debug_sets_log_level(self):
+        """start_gateway(debug=True) should call setup_logging with DEBUG level."""
+        launcher, mock_rns = _import_launcher()
+
+        mock_interface = MagicMock()
+        mock_interface.online = True
+        mock_interface.interface = MagicMock()
+        mock_interface.name = "TestRadio"
+
+        import logging as _logging
+        captured_calls = []
+
+        def mock_setup_logging(**kwargs):
+            captured_calls.append(kwargs)
+
+        with patch.object(launcher, 'MeshtasticInterface', return_value=mock_interface), \
+             patch.object(launcher, 'load_config', return_value={"gateway": {}}), \
+             patch.object(launcher, 'setup_logging', side_effect=mock_setup_logging), \
+             patch.object(launcher, '_stop_event', threading.Event()) as mock_event:
+
+            mock_event.set()
+            with pytest.raises(SystemExit):
+                launcher.start_gateway(debug=True)
+
+            assert len(captured_calls) == 1
+            assert captured_calls[0]['level'] == _logging.DEBUG

@@ -7,6 +7,7 @@ Invoked from the Command Center menu (option 'd').
 """
 import os
 import platform
+import shutil
 import sys
 
 # Ensure project root is on path
@@ -23,6 +24,60 @@ from src.utils.service_check import (
     check_rns_lib, check_meshtastic_lib, check_serial_ports, check_rns_config,
     check_rnsd_status, check_meshtasticd_status, check_rns_udp_port,
 )
+
+
+# ── System Resource Helpers (stdlib only, MeshForge pattern) ──
+def _get_uptime():
+    """Return system uptime string, or None if unavailable."""
+    try:
+        if os.path.isfile('/proc/uptime'):
+            with open('/proc/uptime') as f:
+                secs = int(float(f.read().split()[0]))
+            days, rem = divmod(secs, 86400)
+            hours, rem = divmod(rem, 3600)
+            mins = rem // 60
+            parts = []
+            if days:
+                parts.append(f"{days}d")
+            if hours:
+                parts.append(f"{hours}h")
+            parts.append(f"{mins}m")
+            return " ".join(parts)
+    except (OSError, ValueError):
+        pass
+    return None
+
+
+def _get_memory():
+    """Return (used_mb, total_mb) from /proc/meminfo, or None."""
+    try:
+        if os.path.isfile('/proc/meminfo'):
+            info = {}
+            with open('/proc/meminfo') as f:
+                for line in f:
+                    parts = line.split()
+                    if len(parts) >= 2:
+                        info[parts[0].rstrip(':')] = int(parts[1])
+            total = info.get('MemTotal', 0)
+            avail = info.get('MemAvailable', 0)
+            if total > 0:
+                used_mb = (total - avail) / 1024
+                total_mb = total / 1024
+                return (used_mb, total_mb)
+    except (OSError, ValueError, KeyError):
+        pass
+    return None
+
+
+def _get_disk():
+    """Return (used_gb, total_gb) for root filesystem."""
+    try:
+        usage = shutil.disk_usage("/")
+        used_gb = (usage.total - usage.free) / (1024 ** 3)
+        total_gb = usage.total / (1024 ** 3)
+        return (used_gb, total_gb)
+    except OSError:
+        return None
 
 
 # ── Render ───────────────────────────────────────────────────
@@ -51,6 +106,25 @@ def render_dashboard():
     print(box_kv("Platform", f"{platform.system()} {platform.release()}", w))
     print(box_kv("Python", f"{platform.python_version()} ({sys.executable})", w))
     print(box_kv("Hostname", platform.node(), w))
+
+    uptime = _get_uptime()
+    if uptime:
+        print(box_kv("Uptime", uptime, w))
+
+    mem = _get_memory()
+    if mem:
+        used_mb, total_mb = mem
+        pct = (used_mb / total_mb * 100) if total_mb else 0
+        color = C.GRN if pct < 70 else (C.YLW if pct < 90 else C.RED)
+        print(box_kv("Memory", f"{color}{used_mb:.0f}{C.RST}/{total_mb:.0f} MB ({pct:.0f}%)", w))
+
+    disk = _get_disk()
+    if disk:
+        used_gb, total_gb = disk
+        pct = (used_gb / total_gb * 100) if total_gb else 0
+        color = C.GRN if pct < 80 else (C.YLW if pct < 95 else C.RED)
+        print(box_kv("Disk", f"{color}{used_gb:.1f}{C.RST}/{total_gb:.1f} GB ({pct:.0f}%)", w))
+
     print(box_bot(w))
     print()
 

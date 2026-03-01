@@ -1,4 +1,4 @@
-import RNS
+import argparse
 import logging
 import os
 import signal
@@ -10,9 +10,11 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, BASE_DIR)
 sys.path.insert(0, os.path.join(BASE_DIR, 'src'))
 
+import RNS
+
 from version import __version__
 from src.utils.common import CONFIG_PATH, load_config
-from src.utils.log import setup_logging
+from src.utils.log import setup_logging, default_log_path, install_crash_handler
 from src.utils.reconnect import ReconnectStrategy
 from src.utils.bridge_health import BridgeHealthMonitor
 from src.utils.health_probe import ActiveHealthProbe, HealthResult
@@ -34,14 +36,19 @@ HEALTH_CHECK_INTERVAL = 30      # seconds between connection health checks
 _stop_event = threading.Event()
 
 
-def start_gateway():
+def start_gateway(debug=False):
     cfg = load_config()
     if not cfg:
         log.warning("Could not load %s. Using default settings.", CONFIG_PATH)
     gw_config = cfg.get("gateway", {})
 
     # Structured logging opt-in (MeshForge pattern)
-    setup_logging(structured=gw_config.get("structured_logging", False))
+    log_level = logging.DEBUG if debug else logging.INFO
+    setup_logging(
+        level=log_level,
+        log_file=default_log_path(),
+        structured=gw_config.get("structured_logging", False),
+    )
 
     print("============================================================")
     print(f"  SUPERVISOR NOC | RNS-MESHTASTIC GATEWAY v{__version__}")
@@ -148,9 +155,26 @@ def start_gateway():
     shutdown_all_threads()
     sys.exit(0)
 
+def _parse_args(argv=None):
+    parser = argparse.ArgumentParser(
+        description="RNS-Meshtastic Gateway — bridge Reticulum and Meshtastic networks",
+    )
+    parser.add_argument(
+        "--version", action="version",
+        version=f"%(prog)s {__version__}",
+    )
+    parser.add_argument(
+        "--debug", action="store_true",
+        help="Enable debug-level logging",
+    )
+    return parser.parse_args(argv)
+
+
 if __name__ == "__main__":
+    install_crash_handler()
+    args = _parse_args()
     try:
-        start_gateway()
+        start_gateway(debug=args.debug)
     except Exception as e:
         log.critical("Gateway crashed: %s", e, exc_info=True)
         sys.exit(1)

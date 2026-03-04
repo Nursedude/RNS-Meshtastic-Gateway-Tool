@@ -4,10 +4,10 @@
 
 MeshForge (Nursedude/meshforge) has evolved significantly since the last round of improvements were ported to RNS-Meshtastic-Gateway-Tool. This roadmap tracks the porting of meaningful features and reliability patterns across 4 sessions, prioritized by impact and dependency order.
 
-**Current state of Gateway Tool:** v1.5+ with circuit breaker, TX queue, reconnect strategy, slow-start recovery, bridge health monitor, active health probe, thread manager, structured logging, TUI, web dashboard, centralized timeouts, event bus, enhanced config validation, and comprehensive test suite (19 test files).
+**Current state of Gateway Tool:** v1.5+ with circuit breaker, TX queue, reconnect strategy, slow-start recovery, bridge health monitor, active health probe, thread manager, structured logging, TUI, web dashboard, centralized timeouts, event bus, enhanced config validation, persistent message queue, daemon/systemd mode, and comprehensive test suite (21 test files).
 
-**Completed:** Session 1 — Foundation Layer (commit `dc1e7d7`)
-**Remaining gaps vs MeshForge:** No persistent message queue, no daemon/systemd mode, no MQTT bridge mode, no node tracking.
+**Completed:** Session 1 — Foundation Layer (commit `dc1e7d7`), Session 2 — Persistent Message Queue + Daemon Mode
+**Remaining gaps vs MeshForge:** No MQTT bridge mode, no node tracking.
 
 ---
 
@@ -42,47 +42,38 @@ MeshForge (Nursedude/meshforge) has evolved significantly since the last round o
 
 ---
 
-## Session 2: Persistent Message Queue + Daemon Mode (Next Session)
+## Session 2: Persistent Message Queue + Daemon Mode — COMPLETED
 
-### 2a. Persistent Message Queue
+### What Was Delivered
 
-**Why:** Messages currently lost on restart. No retry differentiation, no dead letter queue for debugging.
+- **Persistent Message Queue** (`src/utils/message_queue.py`) — SQLite-backed message persistence with WAL mode. Message lifecycle state machine: PENDING → IN_PROGRESS → DELIVERED / DEAD_LETTER. Priority levels (NORMAL, HIGH). Retry policy with error classification via `classify_error()` from `bridge_health.py` (transient → retry with exponential backoff 2s–60s, permanent → dead letter). Content-hash deduplication (SHA-256, 60s window). Thread-local SQLite connections for thread safety. Event bus integration for status changes. DB path: `~/.config/rns-gateway/message_queue.db`.
+- **TX Queue Callbacks** (`src/utils/tx_queue.py`) — Added optional `on_send_success` and `on_send_failure` callback parameters for delivery notification. Fully backward-compatible.
+- **Meshtastic Interface Integration** (`src/Meshtastic_Interface.py`) — MessageQueue wired as drop-in replacement for TxQueue when `features.message_queue = true`. Routes through `process_incoming()` with priority support. Metrics include `message_queue_pending` and `message_queue_dead_letters`.
+- **Daemon Mode** (`src/daemon.py`) — `DaemonService` protocol with PID file management (`~/.config/rns-gateway/gateway.pid`), `GatewayBridgeService` wrapping `launcher.start_gateway()` in a monitored thread, `Watchdog` with consecutive failure detection and exponential backoff restart. Signal handling: SIGTERM/SIGINT (stop), SIGHUP (config reload). CLI: `python src/daemon.py start|stop|status|restart`.
+- **Systemd Integration** (`scripts/meshgateway.service`) — Type=simple unit file with security hardening (NoNewPrivileges, ProtectSystem=strict, PrivateTmp). ExecReload via SIGHUP. Restart=on-failure.
+- **Config Validation** (`src/utils/common.py`) — Added `message_queue` feature flag validation. Mutual exclusivity warning when both `message_queue` and `tx_queue` are enabled.
+- **Timeout Constants** (`src/utils/timeouts.py`) — Added `MSG_QUEUE_POLL`, `MSG_QUEUE_MAX_RETRIES`, `MSG_QUEUE_RETRY_INITIAL`, `MSG_QUEUE_RETRY_MAX`, `MSG_QUEUE_RETRY_MULTIPLIER`, `MSG_QUEUE_DEDUP_WINDOW`, `MSG_QUEUE_DEDUP_CLEANUP`, `WATCHDOG_INTERVAL`, `WATCHDOG_FAILURES`, `DAEMON_STOP_TIMEOUT`.
+- **Tests** — 2 new test files (`test_message_queue.py` with 30 tests, `test_daemon.py` with 32 tests). 21 test files total, 363 tests passing.
 
-- Create `src/utils/message_queue.py` adapted from MeshForge's `src/gateway/message_queue.py`
-- SQLite-backed persistence (survives restarts)
-- Message lifecycle: PENDING → IN_PROGRESS → DELIVERED / FAILED → DEAD_LETTER
-- Priority levels: NORMAL, HIGH
-- Retry policy with error classification:
-  - Transient (retriable): connection_reset, timeout, "not connected"
-  - Permanent (non-retriable): permission_denied, invalid_destination
-- Exponential backoff: 2s initial, 60s max
-- Deduplication via content hash + time window
-- Integration with TX queue: replace simple FIFO with persistent queue
-- Emit events via event_bus on message state changes
-- DB path: `~/.config/rns-gateway/message_queue.db`
+### Files Changed
 
-### 2b. Daemon Mode
-
-**Why:** Gateway Tool currently requires interactive session. No auto-recovery for embedded/Pi deployments.
-
-- Create `src/daemon.py` adapted from MeshForge's `src/daemon.py`
-- `DaemonService` protocol (start, stop, is_alive, get_status)
-- `GatewayBridgeService` wrapping `launcher.py:start_gateway()`
-- Thread watchdog: monitors service health, auto-restarts with backoff
-- PID file management: prevents multiple instances
-- Signal handling: SIGTERM (stop), SIGHUP (reload config)
-- Status reporting: JSON output for systemd integration
-- Systemd unit file: `scripts/meshgateway.service`
-- CLI: `python src/daemon.py start|stop|status|restart`
-
-### 2c. Tests
-
-- `tests/test_message_queue.py` — persistence, retry, dedup, dead letter, lifecycle
-- `tests/test_daemon.py` — service lifecycle, watchdog, PID management
+| Action | File |
+|--------|------|
+| CREATE | `src/utils/message_queue.py` |
+| CREATE | `src/daemon.py` |
+| CREATE | `scripts/meshgateway.service` |
+| CREATE | `tests/test_message_queue.py` |
+| CREATE | `tests/test_daemon.py` |
+| MODIFY | `src/utils/timeouts.py` (message queue + daemon constants) |
+| MODIFY | `src/utils/tx_queue.py` (delivery callbacks) |
+| MODIFY | `src/Meshtastic_Interface.py` (message queue integration) |
+| MODIFY | `src/utils/common.py` (feature flag validation) |
+| MODIFY | `config.json.example` (message_queue flag) |
+| MODIFY | `pyproject.toml` (S108 test ignore) |
 
 ---
 
-## Session 3: MQTT Bridge Mode
+## Session 3: MQTT Bridge Mode (Next Session)
 
 ### 3a. MQTT Bridge Handler
 
@@ -158,7 +149,7 @@ MeshForge (Nursedude/meshforge) has evolved significantly since the last round o
 | MODIFY | `launcher.py` (emit events, use timeouts) |
 | MODIFY | `tests/test_common.py` (new validation tests) |
 
-### Session 2
+### Session 2 (Completed)
 | Action | File |
 |--------|------|
 | CREATE | `src/utils/message_queue.py` |
@@ -166,9 +157,12 @@ MeshForge (Nursedude/meshforge) has evolved significantly since the last round o
 | CREATE | `scripts/meshgateway.service` |
 | CREATE | `tests/test_message_queue.py` |
 | CREATE | `tests/test_daemon.py` |
-| MODIFY | `src/utils/tx_queue.py` (persistent queue integration) |
-| MODIFY | `launcher.py` (daemon support) |
-| MODIFY | `requirements.txt` (no new deps — sqlite3 is stdlib) |
+| MODIFY | `src/utils/timeouts.py` (message queue + daemon constants) |
+| MODIFY | `src/utils/tx_queue.py` (delivery callbacks) |
+| MODIFY | `src/Meshtastic_Interface.py` (message queue integration) |
+| MODIFY | `src/utils/common.py` (feature flag validation) |
+| MODIFY | `config.json.example` (message_queue flag) |
+| MODIFY | `pyproject.toml` (S108 test ignore) |
 
 ### Session 3
 | Action | File |

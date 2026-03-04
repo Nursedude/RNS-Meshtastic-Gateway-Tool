@@ -132,9 +132,22 @@ class MeshtasticInterface(Interface):
             from src.utils.circuit_breaker import CircuitBreaker
             self._circuit_breaker = CircuitBreaker()
 
+        # --- RELIABILITY: Persistent Message Queue (Session 2) ---
+        self._use_message_queue = features.get("message_queue", False)
+        self._message_queue = None
+
         # --- RELIABILITY: Transmit Queue (MeshForge pattern) ---
+        # When message_queue is enabled, it has its own drain thread with
+        # inter-packet delay support, so TxQueue is not needed.
         self._tx_queue = None
-        if self._use_tx_queue:
+        if self._use_message_queue:
+            from src.utils.message_queue import MessageQueue
+            self._message_queue = MessageQueue(
+                send_fn=self._do_send,
+                inter_packet_delay_fn=self._inter_packet_delay_fn,
+                on_status_change=self._on_queue_status_change,
+            )
+        elif self._use_tx_queue:
             from src.utils.tx_queue import TxQueue
             self._tx_queue = TxQueue(
                 send_fn=self._do_send,
@@ -150,9 +163,17 @@ class MeshtasticInterface(Interface):
         else:
             self._init_serial(owner, name, config or {})
 
-        # Start TX queue after connection is established
-        if self._tx_queue and self.online:
+        # Start queue after connection is established
+        if self._message_queue and self.online:
+            self._message_queue.start()
+        elif self._tx_queue and self.online:
             self._tx_queue.start()
+
+    def _on_queue_status_change(self, msg_id, old_status, new_status):
+        """Handle message queue status changes for logging/monitoring."""
+        log.debug("[%s] Message %s: %s -> %s",
+                  self.name, msg_id[:8] if msg_id else "?",
+                  old_status, new_status)
 
     def _init_serial(self, owner: Any, name: str, config: Dict[str, Any]) -> None:
         """Initialize via serial/USB connection."""
@@ -296,8 +317,10 @@ class MeshtasticInterface(Interface):
                         self.name)
             return
 
-        # TX queue: enqueue for async drain, or send directly
-        if self._tx_queue:
+        # Persistent queue takes priority over simple TX queue
+        if self._message_queue:
+            self._message_queue.enqueue(data)
+        elif self._tx_queue:
             self._tx_queue.enqueue(data)
         else:
             self._do_send(data)
@@ -383,7 +406,9 @@ class MeshtasticInterface(Interface):
         """
         log.info("[%s] Attempting reconnect...", self.name)
 
-        # Stop TX queue before teardown
+        # Stop queues before teardown
+        if self._message_queue:
+            self._message_queue.stop()
         if self._tx_queue:
             self._tx_queue.stop()
 
@@ -420,8 +445,10 @@ class MeshtasticInterface(Interface):
             config = {"port": self.port, "connection_type": "serial"}
             self._init_serial(self.owner, self.name, config)
 
-        # Restart TX queue if connection succeeded
-        if self._tx_queue and self.online:
+        # Restart queues if connection succeeded
+        if self._message_queue and self.online:
+            self._message_queue.start()
+        elif self._tx_queue and self.online:
             self._tx_queue.start()
 
         if self._bridge_health and self.online:
@@ -433,7 +460,9 @@ class MeshtasticInterface(Interface):
         """
         Clean shutdown to release the connection.
         """
-        # Stop TX queue
+        # Stop queues
+        if self._message_queue:
+            self._message_queue.stop()
         if self._tx_queue:
             self._tx_queue.stop()
 
@@ -457,6 +486,9 @@ class MeshtasticInterface(Interface):
             "tx_errors": self.tx_errors,
             "online": self.online,
         }
+        if self._message_queue:
+            m["message_queue_pending"] = self._message_queue.pending_count
+            m["message_queue_dead_letters"] = self._message_queue.dead_letter_count
         if self._tx_queue:
             m["tx_queue_pending"] = self._tx_queue.pending
             m["tx_queue_dropped"] = self._tx_queue.dropped

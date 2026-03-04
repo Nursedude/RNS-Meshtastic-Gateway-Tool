@@ -1,0 +1,43 @@
+# RNS-Meshtastic Gateway — systemd unit file
+#
+# Installation:
+#   1. Copy this file to /etc/systemd/system/meshgateway.service
+#   2. Adjust WorkingDirectory, ExecStart, and User/Group for your setup
+#   3. sudo systemctl daemon-reload
+#   4. sudo systemctl enable --now meshgateway
+#
+# Logs: journalctl -u meshgateway -f
+
+[Unit]
+Description=RNS-Meshtastic Gateway Bridge
+Documentation=https://github.com/Nursedude/RNS-Meshtastic-Gateway-Tool
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+# User=meshgateway
+# Group=meshgateway
+
+WorkingDirectory=/opt/rns-meshtastic-gateway
+ExecStart=/usr/bin/python3 src/daemon.py start
+ExecStop=/usr/bin/python3 src/daemon.py stop
+ExecReload=/bin/kill -HUP $MAINPID
+
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=15
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/home
+
+# Logging (stdout/stderr -> journald)
+Environment=PYTHONUNBUFFERED=1
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=meshgateway
+
+[Install]
+WantedBy=multi-user.target

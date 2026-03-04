@@ -22,12 +22,17 @@ class TxQueue:
         maxsize: Maximum queued packets before backpressure kicks in.
         inter_packet_delay_fn: Optional callable returning seconds to
             sleep between packets (e.g. for slow-start recovery).
+        on_send_success: Optional callback(data) on successful send.
+        on_send_failure: Optional callback(data, exception) on failed send.
     """
 
-    def __init__(self, send_fn, maxsize=TX_QUEUE_MAXSIZE, inter_packet_delay_fn=None):
+    def __init__(self, send_fn, maxsize=TX_QUEUE_MAXSIZE, inter_packet_delay_fn=None,
+                 on_send_success=None, on_send_failure=None):
         self._send_fn = send_fn
         self._queue = queue.Queue(maxsize=maxsize)
         self._delay_fn = inter_packet_delay_fn
+        self._on_success = on_send_success
+        self._on_failure = on_send_failure
         self._stop = threading.Event()
         self._thread = None
         self._dropped = 0
@@ -86,5 +91,15 @@ class TxQueue:
 
             try:
                 self._send_fn(data)
+                if self._on_success:
+                    try:
+                        self._on_success(data)
+                    except Exception as cb_err:
+                        log.debug("TX success callback error: %s", cb_err)
             except Exception as e:
                 log.error("TX drain send error: %s", e)
+                if self._on_failure:
+                    try:
+                        self._on_failure(data, e)
+                    except Exception as cb_err:
+                        log.debug("TX failure callback error: %s", cb_err)

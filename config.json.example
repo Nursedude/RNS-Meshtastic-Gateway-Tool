@@ -15,6 +15,7 @@
     },
     "features": {
         "circuit_breaker": true,
-        "tx_queue": true
+        "tx_queue": true,
+        "message_queue": false
     }
 }

@@ -86,3 +86,41 @@ TX_QUEUE_POLL = 0.5  # seconds
 
 # Dashboard auto-refresh interval
 DASHBOARD_REFRESH = 30  # seconds
+
+# =============================================================================
+# Message Queue
+# =============================================================================
+
+# Dispatch loop poll interval (how often to check for PENDING messages)
+MSG_QUEUE_POLL = 1.0  # seconds
+
+# Maximum retry attempts before dead-lettering
+MSG_QUEUE_MAX_RETRIES = 5
+
+# Initial retry backoff delay
+MSG_QUEUE_RETRY_INITIAL = 2.0  # seconds
+
+# Maximum retry backoff delay
+MSG_QUEUE_RETRY_MAX = 60.0  # seconds
+
+# Retry backoff multiplier
+MSG_QUEUE_RETRY_MULTIPLIER = 2.0
+
+# Deduplication time window
+MSG_QUEUE_DEDUP_WINDOW = 60.0  # seconds
+
+# Dedup cleanup interval (purge expired hashes)
+MSG_QUEUE_DEDUP_CLEANUP = 300.0  # seconds (every 5 min)
+
+# =============================================================================
+# Daemon / Watchdog
+# =============================================================================
+
+# Watchdog check interval
+WATCHDOG_INTERVAL = 15.0  # seconds
+
+# Consecutive failures before watchdog restarts service
+WATCHDOG_FAILURES = 3
+
+# Daemon stop timeout before SIGKILL
+DAEMON_STOP_TIMEOUT = 10.0  # seconds

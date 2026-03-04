@@ -43,6 +43,7 @@ NOMAD_CONFIG = os.path.join(_HOME, ".nomadnet", "config")
 _UNSET = object()
 
 _VALID_CONNECTION_TYPES = ("serial", "tcp")
+_VALID_BRIDGE_MODES = ("direct", "mqtt")
 
 _HOSTNAME_RE = re.compile(r'^[a-zA-Z0-9._:\-]+$')
 
@@ -155,6 +156,33 @@ def validate_config(cfg):
         bitrate = gw.get("bitrate")
         if bitrate is not None and (not isinstance(bitrate, (int, float)) or bitrate <= 0):
             warnings.append(f"gateway.bitrate must be a positive number, got {bitrate!r}")
+
+        # Bridge mode
+        bridge_mode = gw.get("bridge_mode")
+        if bridge_mode is not None and bridge_mode not in _VALID_BRIDGE_MODES:
+            warnings.append(
+                f"gateway.bridge_mode must be one of {_VALID_BRIDGE_MODES}, "
+                f"got '{bridge_mode}'"
+            )
+
+        # MQTT fields (validated when present regardless of bridge_mode)
+        mqtt_host = gw.get("mqtt_host")
+        if mqtt_host is not None:
+            ok, err = validate_hostname(mqtt_host)
+            if not ok:
+                warnings.append(f"gateway.mqtt_host: {err}")
+
+        mqtt_port = gw.get("mqtt_port")
+        if mqtt_port is not None:
+            ok, err = validate_port(mqtt_port) if isinstance(mqtt_port, int) and not isinstance(mqtt_port, bool) else (False, f"must be an integer, got {type(mqtt_port).__name__}")
+            if not ok:
+                warnings.append(f"gateway.mqtt_port: {err}")
+
+        http_api_port = gw.get("http_api_port")
+        if http_api_port is not None:
+            ok, err = validate_port(http_api_port) if isinstance(http_api_port, int) and not isinstance(http_api_port, bool) else (False, f"must be an integer, got {type(http_api_port).__name__}")
+            if not ok:
+                warnings.append(f"gateway.http_api_port: {err}")
 
     dash = cfg.get("dashboard", {})
     if isinstance(dash, dict):
@@ -276,6 +304,44 @@ def validate_config_strict(cfg):
                 severity="warning",
             ))
 
+    # Bridge mode
+    bridge_mode = gw.get("bridge_mode")
+    if bridge_mode is not None:
+        if bridge_mode not in _VALID_BRIDGE_MODES:
+            errors.append(ConfigValidationError(
+                "gateway.bridge_mode",
+                f"must be one of {_VALID_BRIDGE_MODES}, got '{bridge_mode}'",
+            ))
+        elif bridge_mode == "mqtt":
+            mqtt_host = gw.get("mqtt_host")
+            if mqtt_host is None:
+                errors.append(ConfigValidationError(
+                    "gateway.mqtt_host",
+                    "required when bridge_mode is 'mqtt'",
+                    severity="warning",
+                ))
+
+    # MQTT fields (validated when present)
+    mqtt_host = gw.get("mqtt_host")
+    if mqtt_host is not None:
+        ok, err = validate_hostname(mqtt_host)
+        if not ok:
+            errors.append(ConfigValidationError("gateway.mqtt_host", err))
+
+    mqtt_port = gw.get("mqtt_port")
+    if mqtt_port is not None:
+        ok, err = validate_port(mqtt_port) if isinstance(mqtt_port, int) and not isinstance(mqtt_port, bool) else (
+            False, f"must be an integer, got {type(mqtt_port).__name__}")
+        if not ok:
+            errors.append(ConfigValidationError("gateway.mqtt_port", err))
+
+    http_api_port = gw.get("http_api_port")
+    if http_api_port is not None:
+        ok, err = validate_port(http_api_port) if isinstance(http_api_port, int) and not isinstance(http_api_port, bool) else (
+            False, f"must be an integer, got {type(http_api_port).__name__}")
+        if not ok:
+            errors.append(ConfigValidationError("gateway.http_api_port", err))
+
     # Feature flags
     features = cfg.get("features", {})
     if isinstance(features, dict):
@@ -357,6 +423,47 @@ def config_template_tcp(name="Supervisor NOC", host="localhost", tcp_port=4403):
             "connection_type": "tcp",
             "host": host,
             "tcp_port": tcp_port,
+            "bitrate": 500,
+            "rns_configdir": None,
+            "structured_logging": False,
+        },
+        "dashboard": {
+            "host": "127.0.0.1",
+            "port": 5000,
+        },
+        "features": {
+            "circuit_breaker": True,
+            "tx_queue": True,
+        },
+    }
+    return cfg
+
+
+def config_template_mqtt(
+    name="Supervisor NOC",
+    mqtt_host="localhost",
+    mqtt_port=1883,
+    region="US",
+    http_api_port=9443,
+):
+    """Generate an MQTT bridge mode config template.
+
+    Args:
+        name: Gateway display name.
+        mqtt_host: MQTT broker hostname.
+        mqtt_port: MQTT broker port.
+        region: Meshtastic region code (e.g. 'US', 'EU').
+        http_api_port: meshtasticd HTTP API port.
+    """
+    cfg = {
+        "gateway": {
+            "name": name,
+            "bridge_mode": "mqtt",
+            "mqtt_host": mqtt_host,
+            "mqtt_port": mqtt_port,
+            "mqtt_topic_root": "msh",
+            "mqtt_region": region,
+            "http_api_port": http_api_port,
             "bitrate": 500,
             "rns_configdir": None,
             "structured_logging": False,

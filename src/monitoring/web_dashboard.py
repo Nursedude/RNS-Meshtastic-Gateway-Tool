@@ -2,8 +2,10 @@ import logging
 import os
 import platform
 import sys
+import threading
+from collections import deque
 
-from flask import Flask, render_template
+from flask import Flask, jsonify, render_template
 
 # Ensure project root is on path
 _BASE = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -25,11 +27,51 @@ app = Flask(
     template_folder=os.path.join(os.path.dirname(__file__), 'templates'),
 )
 
+# ── Live Data (populated by event bus subscribers) ────────────
+_recent_messages = deque(maxlen=50)
+_message_lock = threading.Lock()
+_bridge_health_ref = None
+_node_tracker_ref = None
+
+
+def set_bridge_health(health):
+    """Wire bridge health monitor into the dashboard (called by launcher)."""
+    global _bridge_health_ref
+    _bridge_health_ref = health
+
+
+def set_node_tracker(tracker):
+    """Wire node tracker into the dashboard (called by launcher)."""
+    global _node_tracker_ref
+    _node_tracker_ref = tracker
+
+
+def _on_message_event(event):
+    """Event bus subscriber: buffer recent messages for API."""
+    with _message_lock:
+        _recent_messages.append({
+            "direction": event.direction,
+            "content": event.content,
+            "node_id": event.node_id,
+            "channel": event.channel,
+            "network": event.network,
+            "timestamp": event.timestamp.isoformat(),
+        })
+
+
+def init_event_subscribers():
+    """Subscribe to event bus for dashboard data. Called once at startup."""
+    from src.utils.event_bus import event_bus
+    event_bus.subscribe("message", _on_message_event)
+
 
 @app.after_request
 def add_security_headers(response):
     """Add security headers to every response (OWASP recommendations)."""
-    response.headers['Content-Security-Policy'] = "default-src 'self'; style-src 'self' 'unsafe-inline'"
+    response.headers['Content-Security-Policy'] = (
+        "default-src 'self'; style-src 'self' 'unsafe-inline'; "
+        "script-src 'self' 'unsafe-inline'"
+    )
     response.headers['X-Content-Type-Options'] = 'nosniff'
     response.headers['X-Frame-Options'] = 'DENY'
     return response
@@ -69,7 +111,37 @@ def home():
         gw_port=gw.get('port', '(unset)'),
         gw_connection=gw.get('connection_type', 'serial'),
         gw_bitrate=gw.get('bitrate', '?'),
+        bridge_mode=gw.get('bridge_mode', 'direct'),
+        node_count=_node_tracker_ref.node_count if _node_tracker_ref else 0,
+        bridge_status=(
+            _bridge_health_ref.get_bridge_status().value
+            if _bridge_health_ref else 'unknown'
+        ),
     )
+
+
+@app.route('/api/messages')
+def api_messages():
+    """Recent message feed (last 50 messages)."""
+    with _message_lock:
+        messages = list(_recent_messages)
+    return jsonify(messages)
+
+
+@app.route('/api/health')
+def api_health():
+    """Bridge health summary."""
+    if _bridge_health_ref is None:
+        return jsonify({"error": "Bridge health monitor not initialized"}), 503
+    return jsonify(_bridge_health_ref.get_summary())
+
+
+@app.route('/api/nodes')
+def api_nodes():
+    """Known mesh nodes list."""
+    if _node_tracker_ref is None:
+        return jsonify({"error": "Node tracker not initialized"}), 503
+    return jsonify(_node_tracker_ref.get_all_nodes())
 
 
 if __name__ == '__main__':

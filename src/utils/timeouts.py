@@ -124,3 +124,33 @@ WATCHDOG_FAILURES = 3
 
 # Daemon stop timeout before SIGKILL
 DAEMON_STOP_TIMEOUT = 10.0  # seconds
+
+# =============================================================================
+# MQTT Bridge
+# =============================================================================
+
+# MQTT broker connection timeout
+MQTT_CONNECT_TIMEOUT = 10.0  # seconds
+
+# MQTT auto-reconnect backoff bounds
+MQTT_RECONNECT_MIN = 2.0  # seconds
+MQTT_RECONNECT_MAX = 60.0  # seconds
+
+# MQTT keepalive interval
+MQTT_KEEPALIVE = 60  # seconds
+
+# HTTP POST timeout for meshtasticd toradio API
+HTTP_TORADIO_TIMEOUT = 10.0  # seconds
+
+# Message deduplication time window
+MQTT_DEDUP_WINDOW = 60.0  # seconds
+
+# =============================================================================
+# Node Tracker
+# =============================================================================
+
+# Auto-save interval for node persistence
+NODE_TRACKER_SAVE_INTERVAL = 300.0  # seconds (every 5 min)
+
+# Remove nodes not seen within this many days
+NODE_TRACKER_STALE_DAYS = 7

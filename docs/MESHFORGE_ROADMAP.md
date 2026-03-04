@@ -4,10 +4,10 @@
 
 MeshForge (Nursedude/meshforge) has evolved significantly since the last round of improvements were ported to RNS-Meshtastic-Gateway-Tool. This roadmap tracks the porting of meaningful features and reliability patterns across 4 sessions, prioritized by impact and dependency order.
 
-**Current state of Gateway Tool:** v1.5+ with circuit breaker, TX queue, reconnect strategy, slow-start recovery, bridge health monitor, active health probe, thread manager, structured logging, TUI, web dashboard, centralized timeouts, event bus, enhanced config validation, persistent message queue, daemon/systemd mode, and comprehensive test suite (21 test files).
+**Current state of Gateway Tool:** v1.5+ with circuit breaker, TX queue, reconnect strategy, slow-start recovery, bridge health monitor, active health probe, thread manager, structured logging, TUI, web dashboard, centralized timeouts, event bus, enhanced config validation, persistent message queue, daemon/systemd mode, MQTT bridge mode, node tracker, dashboard API endpoints, and comprehensive test suite (23 test files).
 
-**Completed:** Session 1 — Foundation Layer (commit `dc1e7d7`), Session 2 — Persistent Message Queue + Daemon Mode
-**Remaining gaps vs MeshForge:** No MQTT bridge mode, no node tracking.
+**Completed:** All 4 sessions — Foundation Layer, Persistent Message Queue + Daemon Mode, MQTT Bridge Mode, Node Tracking + Dashboard Integration
+**Remaining gaps vs MeshForge:** None — all sessions complete.
 
 ---
 
@@ -73,60 +73,29 @@ MeshForge (Nursedude/meshforge) has evolved significantly since the last round o
 
 ---
 
-## Session 3: MQTT Bridge Mode (Next Session)
+## Session 3: MQTT Bridge Mode — COMPLETED
 
-### 3a. MQTT Bridge Handler
+### What Was Delivered
 
-**Why:** TCP-based bridge blocks meshtasticd web client. MQTT mode operates without interference — the single most requested improvement.
-
-- Create `src/mqtt_bridge.py` adapted from MeshForge's `src/gateway/mqtt_bridge_handler.py`
-- RX via MQTT: subscribe to `msh/{region}/2/json/{channel}/#`
-- TX via HTTP protobuf: POST to `http://localhost:9443/api/v1/toradio`
-- Zero interference with meshtasticd web client
-- paho-mqtt integration with auto-reconnect
-- Circuit breaker integration
-- Message deduplication (by message ID + time window)
-- Add `paho-mqtt` to requirements.txt
-
-### 3b. Bridge Mode Selection
-
-- Extend `config.json` schema: `gateway.bridge_mode` ∈ {direct, mqtt}
-  - `direct` — current TCP/serial mode (default, backward compatible)
-  - `mqtt` — new MQTT bridge mode
-- Update `launcher.py` to select bridge handler based on mode
-- Update TUI menu to allow switching bridge mode
-
-### 3c. Tests
-
-- `tests/test_mqtt_bridge.py` — MQTT subscribe/publish, HTTP TX, dedup, reconnect
-- Integration test with mock meshtasticd MQTT broker
+- **MQTT Bridge Handler** (`src/mqtt_bridge.py`) — Zero-interference bridge to meshtasticd via MQTT. RX subscribes to `msh/{region}/2/json/{channel}/#`, TX via HTTP POST to `http://localhost:9443/api/v1/toradio`. Supports paho-mqtt v2.0 callback API, auto-reconnect with configurable backoff, circuit breaker integration, message deduplication by ID + time window, event bus integration, TX/message queue support. Presents same interface as `MeshtasticInterface` for transparent launcher swap.
+- **Bridge Mode Selection** (`launcher.py`) — `gateway.bridge_mode` config field: `"direct"` (default, backward compatible) or `"mqtt"`. Launcher conditionally imports `MqttBridge` or `MeshtasticInterface`.
+- **Config Validation** (`src/utils/common.py`) — Added `_VALID_BRIDGE_MODES`, MQTT field validation (`mqtt_host`, `mqtt_port`, `mqtt_topic_root`, `mqtt_region`, `http_api_port`) in both `validate_config()` and `validate_config_strict()`. Added `config_template_mqtt()`.
+- **Timeout Constants** (`src/utils/timeouts.py`) — Added `MQTT_CONNECT_TIMEOUT`, `MQTT_RECONNECT_MIN`, `MQTT_RECONNECT_MAX`, `MQTT_KEEPALIVE`, `HTTP_TORADIO_TIMEOUT`, `MQTT_DEDUP_WINDOW`.
+- **Tests** — `tests/test_mqtt_bridge.py` with MQTT connection, RX/TX, dedup, circuit breaker, health check, and metrics tests.
 
 ---
 
-## Session 4: Polish, Node Tracking, and Production Hardening
+## Session 4: Node Tracking, Dashboard Integration — COMPLETED
 
-### 4a. Message Deduplication Improvements
+### What Was Delivered
 
-- Three-layer dedup: circuit breaker level + routing level + queue level
-- Configurable time window in config.json
-
-### 4b. Node Tracker (Basic)
-
-- Track known nodes with last-seen, SNR, hop count
-- Display in TUI dashboard and web dashboard
-- Persist to `~/.config/rns-gateway/nodes.json`
-
-### 4c. Dashboard Integration
-
-- Wire event bus subscribers into web dashboard (live message feed)
-- Wire event bus into TUI dashboard (real-time status)
-- Add message queue stats to both dashboards
-
-### 4d. Production Hardening
-
-- Subprocess timeout protection on all service_check calls
-- Config drift detection (warn if gateway config path != rnsd config)
-- Graceful degradation for missing optional deps (safe_import pattern)
+- **Node Tracker** (`src/utils/node_tracker.py`) — Thread-safe registry of known mesh nodes with `node_id`, `last_seen`, `first_seen`, `message_count`, `snr`, `hop_count`, `node_name`, `rssi`. Event bus integration for auto-update on RX messages. JSON persistence to `~/.config/rns-gateway/nodes.json` with configurable auto-save interval and stale node cleanup.
+- **Web Dashboard API** (`src/monitoring/web_dashboard.py`) — Added `/api/messages` (recent 50 messages), `/api/health` (bridge health summary), `/api/nodes` (known nodes list). Event bus subscriber for live message buffering. Wiring functions `set_bridge_health()`, `set_node_tracker()`, `init_event_subscribers()`.
+- **Web Dashboard UI** (`src/monitoring/templates/dashboard.html`) — Added Bridge Health card, Recent Messages card with auto-refresh (10s), Known Nodes card with auto-refresh (30s), bridge mode display.
+- **TUI Dashboard** (`src/ui/dashboard.py`) — Added bridge mode display, MQTT broker info, Known Nodes panel with recent nodes and SNR.
+- **Launcher Integration** — Node tracker wired into startup/shutdown sequence.
+- **Timeout Constants** (`src/utils/timeouts.py`) — Added `NODE_TRACKER_SAVE_INTERVAL`, `NODE_TRACKER_STALE_DAYS`.
+- **Tests** — `tests/test_node_tracker.py` with node tracking, persistence, event bus, stale cleanup tests.
 
 ---
 
@@ -164,24 +133,28 @@ MeshForge (Nursedude/meshforge) has evolved significantly since the last round o
 | MODIFY | `config.json.example` (message_queue flag) |
 | MODIFY | `pyproject.toml` (S108 test ignore) |
 
-### Session 3
+### Session 3 (Completed)
 | Action | File |
 |--------|------|
 | CREATE | `src/mqtt_bridge.py` |
 | CREATE | `tests/test_mqtt_bridge.py` |
-| MODIFY | `config.json.example` (mqtt bridge config) |
+| MODIFY | `src/utils/timeouts.py` (MQTT timeout constants) |
+| MODIFY | `src/utils/common.py` (MQTT validation, template) |
+| MODIFY | `config.json.example` (MQTT bridge config) |
 | MODIFY | `launcher.py` (bridge mode selection) |
-| MODIFY | `src/ui/menu.py` (bridge mode switch) |
 | MODIFY | `requirements.txt` (add paho-mqtt) |
 
-### Session 4
+### Session 4 (Completed)
 | Action | File |
 |--------|------|
 | CREATE | `src/utils/node_tracker.py` |
 | CREATE | `tests/test_node_tracker.py` |
-| MODIFY | `src/monitoring/web_dashboard.py` (event bus, message feed) |
-| MODIFY | `src/ui/dashboard.py` (event bus, live stats) |
-| MODIFY | `src/utils/service_check.py` (subprocess timeouts) |
+| MODIFY | `src/utils/timeouts.py` (node tracker constants) |
+| MODIFY | `src/monitoring/web_dashboard.py` (API endpoints, event bus) |
+| MODIFY | `src/monitoring/templates/dashboard.html` (health, messages, nodes) |
+| MODIFY | `src/ui/dashboard.py` (bridge mode, nodes panel) |
+| MODIFY | `launcher.py` (node tracker wiring) |
+| MODIFY | `docs/MESHFORGE_ROADMAP.md` (mark sessions complete) |
 
 ---
 

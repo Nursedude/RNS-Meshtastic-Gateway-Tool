@@ -259,6 +259,17 @@ class MeshtasticInterface(Interface):
                 self._circuit_breaker.record_success()
             if self._bridge_health:
                 self._bridge_health.record_message_sent("rns_to_mesh")
+
+            # Event bus notification for dashboards
+            try:
+                from src.utils.event_bus import emit_message
+                emit_message(
+                    direction="tx",
+                    content=repr(data[:32]),
+                    network="meshtastic",
+                )
+            except Exception:  # noqa: S110
+                pass  # Event bus is optional; never block TX path
         except (OSError, AttributeError, TypeError) as e:
             self.tx_errors += 1
             if self._circuit_breaker:
@@ -305,6 +316,20 @@ class MeshtasticInterface(Interface):
                 self.rx_packets += 1
                 if self._bridge_health:
                     self._bridge_health.record_message_sent("mesh_to_rns")
+
+                # Event bus notification for dashboards
+                try:
+                    from src.utils.event_bus import emit_message
+                    node_id = packet.get('fromId', '')
+                    emit_message(
+                        direction="rx",
+                        content=repr(payload[:32]),
+                        node_id=node_id,
+                        network="meshtastic",
+                    )
+                except Exception:  # noqa: S110
+                    pass  # Event bus is optional
+
                 # Pass data up to the RNS Core
                 self.owner.inbound(payload, self)
         except (KeyError, TypeError, AttributeError, ValueError) as e:

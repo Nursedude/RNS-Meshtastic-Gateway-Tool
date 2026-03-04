@@ -8,6 +8,8 @@ service_check.py and startup_checks.py patterns.
 import os
 import socket
 
+from src.utils.timeouts import SUBPROCESS_QUICK, TCP_PREFLIGHT
+
 
 def check_rns_lib():
     """Check whether RNS is importable. Returns (ok: bool, version: str)."""
@@ -52,7 +54,7 @@ def check_rnsd_status():
     try:
         result = subprocess.run(
             ['pgrep', '-x', 'rnsd'],
-            capture_output=True, text=True, timeout=5,
+            capture_output=True, text=True, timeout=SUBPROCESS_QUICK,
         )
         if result.returncode == 0:
             pids = result.stdout.strip().split('\n')
@@ -76,7 +78,7 @@ def check_meshtasticd_status():
     try:
         result = subprocess.run(
             ['systemctl', 'is-active', 'meshtasticd'],
-            capture_output=True, text=True, timeout=5,
+            capture_output=True, text=True, timeout=SUBPROCESS_QUICK,
         )
         state = result.stdout.strip()
         if state == 'active':
@@ -95,7 +97,7 @@ def check_meshtasticd_status():
     try:
         result = subprocess.run(
             ['pgrep', '-x', 'meshtasticd'],
-            capture_output=True, text=True, timeout=5,
+            capture_output=True, text=True, timeout=SUBPROCESS_QUICK,
         )
         if result.returncode == 0:
             pids = result.stdout.strip().split('\n')
@@ -142,7 +144,7 @@ def check_rns_udp_port(port=37428):
 
 
 # ── Pre-flight probes (MeshForge patterns) ──────────────────
-def check_tcp_port(port, host="127.0.0.1", timeout=2):
+def check_tcp_port(port, host="127.0.0.1", timeout=TCP_PREFLIGHT):
     """Check if a TCP port is accepting connections.
 
     Returns (listening: bool, detail: str).

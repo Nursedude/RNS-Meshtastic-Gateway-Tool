@@ -5,6 +5,8 @@ from unittest.mock import patch
 from src.utils.common import (
     validate_hostname, validate_port, validate_config,
     validate_message_length, get_real_user_home, check_config_permissions,
+    validate_config_strict, ConfigValidationError,
+    config_template_serial, config_template_tcp,
 )
 
 
@@ -295,3 +297,107 @@ class TestValidateConfigExtended:
         cfg = {"gateway": "not a dict"}
         warnings = validate_config(cfg)
         assert any("gateway section" in w for w in warnings)
+
+
+class TestValidateConfigStrict:
+    """Tests for structured validation with severity levels."""
+
+    def test_valid_config_returns_empty(self):
+        cfg = {"gateway": {"connection_type": "serial", "bitrate": 500}}
+        errors = validate_config_strict(cfg)
+        assert errors == []
+
+    def test_not_dict_returns_error(self):
+        errors = validate_config_strict("bad")
+        assert len(errors) == 1
+        assert errors[0].severity == "error"
+
+    def test_invalid_connection_type(self):
+        cfg = {"gateway": {"connection_type": "bluetooth"}}
+        errors = validate_config_strict(cfg)
+        assert any(e.field == "gateway.connection_type" for e in errors)
+        assert all(e.severity == "error" for e in errors)
+
+    def test_invalid_port_is_error(self):
+        cfg = {"gateway": {"tcp_port": 99999}}
+        errors = validate_config_strict(cfg)
+        assert any(e.field == "gateway.tcp_port" for e in errors)
+
+    def test_low_bitrate_is_warning(self):
+        cfg = {"gateway": {"bitrate": 50}}
+        errors = validate_config_strict(cfg)
+        bitrate_errors = [e for e in errors if e.field == "gateway.bitrate"]
+        assert len(bitrate_errors) == 1
+        assert bitrate_errors[0].severity == "warning"
+
+    def test_high_bitrate_is_warning(self):
+        cfg = {"gateway": {"bitrate": 50000}}
+        errors = validate_config_strict(cfg)
+        bitrate_errors = [e for e in errors if e.field == "gateway.bitrate"]
+        assert len(bitrate_errors) == 1
+        assert bitrate_errors[0].severity == "warning"
+
+    def test_negative_bitrate_is_error(self):
+        cfg = {"gateway": {"bitrate": -10}}
+        errors = validate_config_strict(cfg)
+        bitrate_errors = [e for e in errors if e.field == "gateway.bitrate"]
+        assert len(bitrate_errors) == 1
+        assert bitrate_errors[0].severity == "error"
+
+    def test_feature_flag_non_bool_is_error(self):
+        cfg = {"features": {"circuit_breaker": "yes"}}
+        errors = validate_config_strict(cfg)
+        assert any(e.field == "features.circuit_breaker" for e in errors)
+
+    def test_feature_flag_bool_is_valid(self):
+        cfg = {"features": {"circuit_breaker": True, "tx_queue": False}}
+        errors = validate_config_strict(cfg)
+        feature_errors = [e for e in errors if e.field.startswith("features.")]
+        assert feature_errors == []
+
+    def test_str_representation(self):
+        err = ConfigValidationError("gateway.port", "invalid", severity="warning")
+        assert "[WARNING]" in str(err)
+        assert "gateway.port" in str(err)
+
+    def test_empty_config_is_valid(self):
+        errors = validate_config_strict({})
+        assert errors == []
+
+
+class TestConfigTemplates:
+    """Tests for config template factory functions."""
+
+    def test_serial_template_structure(self):
+        cfg = config_template_serial()
+        assert cfg["gateway"]["connection_type"] == "serial"
+        assert cfg["gateway"]["name"] == "Supervisor NOC"
+        assert cfg["features"]["circuit_breaker"] is True
+        assert cfg["features"]["tx_queue"] is True
+        assert "dashboard" in cfg
+
+    def test_serial_template_custom_name(self):
+        cfg = config_template_serial(name="My Gateway")
+        assert cfg["gateway"]["name"] == "My Gateway"
+
+    def test_serial_template_custom_port(self):
+        cfg = config_template_serial(port="/dev/ttyACM0")
+        assert cfg["gateway"]["port"] == "/dev/ttyACM0"
+
+    def test_tcp_template_structure(self):
+        cfg = config_template_tcp()
+        assert cfg["gateway"]["connection_type"] == "tcp"
+        assert cfg["gateway"]["host"] == "localhost"
+        assert cfg["gateway"]["tcp_port"] == 4403
+
+    def test_tcp_template_custom_host(self):
+        cfg = config_template_tcp(host="192.168.1.100", tcp_port=9443)
+        assert cfg["gateway"]["host"] == "192.168.1.100"
+        assert cfg["gateway"]["tcp_port"] == 9443
+
+    def test_templates_pass_validation(self):
+        """Generated templates should pass strict validation."""
+        for cfg in [config_template_serial(), config_template_tcp()]:
+            errors = validate_config_strict(cfg)
+            error_level = [e for e in errors if e.severity == "error"]
+            assert error_level == [], f"Template has errors: {error_level}"

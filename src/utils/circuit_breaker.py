@@ -15,6 +15,8 @@ import threading
 import time
 from dataclasses import dataclass, field
 
+from src.utils.timeouts import CIRCUIT_RECOVERY, CIRCUIT_FAILURE_THRESHOLD
+
 
 class State(enum.Enum):
     CLOSED = "closed"
@@ -26,8 +28,8 @@ class State(enum.Enum):
 class CircuitBreaker:
     """Thread-safe circuit breaker with configurable thresholds."""
 
-    failure_threshold: int = 5
-    recovery_timeout: float = 30.0
+    failure_threshold: int = CIRCUIT_FAILURE_THRESHOLD
+    recovery_timeout: float = CIRCUIT_RECOVERY
 
     _state: State = field(default=State.CLOSED, repr=False, compare=False)
     _failures: int = field(default=0, repr=False, compare=False)

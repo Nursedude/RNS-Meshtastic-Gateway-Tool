@@ -19,6 +19,8 @@ import logging
 import threading
 from typing import Callable, Dict, List, Optional
 
+from src.utils.timeouts import THREAD_JOIN
+
 log = logging.getLogger("threads")
 
 
@@ -67,7 +69,7 @@ class ThreadManager:
         log.debug("Started managed thread: %s", name)
         return thread
 
-    def stop_thread(self, name: str, timeout: float = 5.0) -> bool:
+    def stop_thread(self, name: str, timeout: float = THREAD_JOIN) -> bool:
         """Stop a specific thread by name.
 
         Args:
@@ -96,7 +98,7 @@ class ThreadManager:
         log.warning("Thread %s not found", name)
         return False
 
-    def shutdown(self, timeout: float = 5.0) -> int:
+    def shutdown(self, timeout: float = THREAD_JOIN) -> int:
         """Stop all managed threads.
 
         Args:
@@ -150,7 +152,7 @@ def get_thread_manager() -> ThreadManager:
     return _global_manager
 
 
-def shutdown_all_threads(timeout: float = 5.0) -> int:
+def shutdown_all_threads(timeout: float = THREAD_JOIN) -> int:
     """Convenience function to shutdown all globally managed threads."""
     global _global_manager
     if _global_manager is not None:

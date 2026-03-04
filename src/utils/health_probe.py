@@ -32,6 +32,13 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Callable, Dict, List, Optional
 
+from src.utils.timeouts import (
+    HEALTH_CHECK_INTERVAL,
+    SUBPROCESS_QUICK,
+    TCP_CONNECT,
+    THREAD_JOIN,
+)
+
 log = logging.getLogger("health_probe")
 
 
@@ -91,7 +98,7 @@ class ActiveHealthProbe:
 
     def __init__(
         self,
-        interval: int = 30,
+        interval: int = HEALTH_CHECK_INTERVAL,
         fails: int = 3,
         passes: int = 2,
     ):
@@ -262,7 +269,7 @@ class ActiveHealthProbe:
         )
         self._thread.start()
 
-    def stop(self, timeout: float = 5.0) -> None:
+    def stop(self, timeout: float = THREAD_JOIN) -> None:
         """Stop the background health probe thread."""
         self._stop_event.set()
         if self._thread:
@@ -317,7 +324,7 @@ class ActiveHealthProbe:
         sock = None
         try:
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(5)
+            sock.settimeout(TCP_CONNECT)
             result = sock.connect_ex((host, port))
             if result == 0:
                 return HealthResult(healthy=True, reason="connected")
@@ -338,7 +345,7 @@ class ActiveHealthProbe:
         try:
             result = subprocess.run(
                 ["systemctl", "is-active", service_name],
-                capture_output=True, text=True, timeout=5,
+                capture_output=True, text=True, timeout=SUBPROCESS_QUICK,
             )
             status = result.stdout.strip()
             if status == "active":
@@ -358,7 +365,7 @@ _probe_lock = threading.Lock()
 
 
 def get_health_probe(
-    interval: int = 30,
+    interval: int = HEALTH_CHECK_INTERVAL,
     fails: int = 3,
     passes: int = 2,
 ) -> ActiveHealthProbe:

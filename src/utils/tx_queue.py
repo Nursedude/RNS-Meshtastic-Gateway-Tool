@@ -9,6 +9,8 @@ import logging
 import queue
 import threading
 
+from src.utils.timeouts import TX_QUEUE_MAXSIZE, TX_QUEUE_POLL
+
 log = logging.getLogger("tx_queue")
 
 
@@ -22,7 +24,7 @@ class TxQueue:
             sleep between packets (e.g. for slow-start recovery).
     """
 
-    def __init__(self, send_fn, maxsize=32, inter_packet_delay_fn=None):
+    def __init__(self, send_fn, maxsize=TX_QUEUE_MAXSIZE, inter_packet_delay_fn=None):
         self._send_fn = send_fn
         self._queue = queue.Queue(maxsize=maxsize)
         self._delay_fn = inter_packet_delay_fn
@@ -72,7 +74,7 @@ class TxQueue:
 
         while not self._stop.is_set():
             try:
-                data = self._queue.get(timeout=0.5)
+                data = self._queue.get(timeout=TX_QUEUE_POLL)
             except queue.Empty:
                 continue
 

@@ -19,6 +19,8 @@ from src.utils.reconnect import ReconnectStrategy
 from src.utils.bridge_health import BridgeHealthMonitor
 from src.utils.health_probe import ActiveHealthProbe, HealthResult
 from src.utils.threads import shutdown_all_threads
+from src.utils.event_bus import event_bus, emit_service_status
+from src.utils.timeouts import HEALTH_CHECK_INTERVAL
 
 log = logging.getLogger("gateway")
 
@@ -29,8 +31,6 @@ except ImportError as e:
     logging.basicConfig()
     log.critical("Could not import Meshtastic Driver: %s", e)
     sys.exit(1)
-
-HEALTH_CHECK_INTERVAL = 30      # seconds between connection health checks
 
 # Module-level stop event for clean shutdown
 _stop_event = threading.Event()
@@ -74,8 +74,10 @@ def start_gateway(debug=False):
 
     if mesh_interface.online:
         bridge_health.record_connection_event("meshtastic", "connected")
+        emit_service_status("meshtastic", True, "connected")
     else:
         log.warning("Initial connection failed. Will retry...")
+        emit_service_status("meshtastic", False, "initial connection failed")
 
     # 3. Active health probe with hysteresis (MeshForge pattern)
     #    3 consecutive failures before marking unhealthy (prevents false positives)
@@ -149,9 +151,10 @@ def start_gateway(debug=False):
     except KeyboardInterrupt:
         log.info("Shutting down gateway...")
 
-    # Clean shutdown (MeshForge pattern: stop probes → detach → shutdown threads)
+    # Clean shutdown (MeshForge pattern: stop probes → detach → event bus → threads)
     health_probe.stop()
     mesh_interface.detach()
+    event_bus.shutdown()
     shutdown_all_threads()
     sys.exit(0)
 

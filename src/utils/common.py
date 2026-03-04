@@ -7,6 +7,7 @@ import logging
 import os
 import re
 import stat
+from dataclasses import dataclass
 
 log = logging.getLogger("config")
 
@@ -44,6 +45,23 @@ _UNSET = object()
 _VALID_CONNECTION_TYPES = ("serial", "tcp")
 
 _HOSTNAME_RE = re.compile(r'^[a-zA-Z0-9._:\-]+$')
+
+
+@dataclass
+class ConfigValidationError:
+    """Structured validation error with severity (MeshForge pattern).
+
+    Severity levels:
+        error   — Config is unusable; gateway will likely crash.
+        warning — Config is suboptimal; gateway may misbehave.
+        info    — Informational note; no action required.
+    """
+    field: str
+    message: str
+    severity: str = "error"  # "error", "warning", or "info"
+
+    def __str__(self):
+        return f"[{self.severity.upper()}] {self.field}: {self.message}"
 
 
 def validate_hostname(host):
@@ -191,4 +209,157 @@ def load_config(fallback=_UNSET):
         log.warning(warning)
     for warning in validate_config(cfg):
         log.warning(warning)
+    return cfg
+
+
+def validate_config_strict(cfg):
+    """Validate config and return structured ConfigValidationError list.
+
+    Unlike validate_config() which returns plain strings, this returns
+    typed errors with severity levels (error/warning/info) for richer
+    UI display and programmatic handling.
+
+    Returns:
+        list[ConfigValidationError]
+    """
+    errors = []
+    if not isinstance(cfg, dict):
+        errors.append(ConfigValidationError("config", "Config is not a JSON object"))
+        return errors
+
+    gw = cfg.get("gateway", {})
+    if not isinstance(gw, dict):
+        errors.append(ConfigValidationError("gateway", "gateway section must be a JSON object"))
+        return errors
+
+    # Connection type
+    conn = gw.get("connection_type")
+    if conn is not None and conn not in _VALID_CONNECTION_TYPES:
+        errors.append(ConfigValidationError(
+            "gateway.connection_type",
+            f"must be one of {_VALID_CONNECTION_TYPES}, got '{conn}'",
+        ))
+
+    # TCP port
+    val = gw.get("tcp_port")
+    if val is not None:
+        ok, err = validate_port(val) if isinstance(val, int) and not isinstance(val, bool) else (
+            False, f"must be an integer, got {type(val).__name__}")
+        if not ok:
+            errors.append(ConfigValidationError("gateway.tcp_port", err))
+
+    # Host
+    host = gw.get("host")
+    if host is not None:
+        ok, err = validate_hostname(host)
+        if not ok:
+            errors.append(ConfigValidationError("gateway.host", err))
+
+    # Bitrate
+    bitrate = gw.get("bitrate")
+    if bitrate is not None:
+        if not isinstance(bitrate, (int, float)) or bitrate <= 0:
+            errors.append(ConfigValidationError(
+                "gateway.bitrate",
+                f"must be a positive number, got {bitrate!r}",
+            ))
+        elif bitrate < 100:
+            errors.append(ConfigValidationError(
+                "gateway.bitrate",
+                f"unusually low ({bitrate} bps) — typical LoRa range is 100-10000",
+                severity="warning",
+            ))
+        elif bitrate > 10000:
+            errors.append(ConfigValidationError(
+                "gateway.bitrate",
+                f"unusually high ({bitrate} bps) — typical LoRa range is 100-10000",
+                severity="warning",
+            ))
+
+    # Feature flags
+    features = cfg.get("features", {})
+    if isinstance(features, dict):
+        for flag in ("circuit_breaker", "tx_queue"):
+            val = features.get(flag)
+            if val is not None and not isinstance(val, bool):
+                errors.append(ConfigValidationError(
+                    f"features.{flag}",
+                    f"must be true or false, got {type(val).__name__}",
+                ))
+
+    # Dashboard
+    dash = cfg.get("dashboard", {})
+    if isinstance(dash, dict):
+        port = dash.get("port")
+        if port is not None:
+            ok, err = validate_port(port) if isinstance(port, int) and not isinstance(port, bool) else (
+                False, f"must be an integer, got {type(port).__name__}")
+            if not ok:
+                errors.append(ConfigValidationError("dashboard.port", err))
+        dash_host = dash.get("host")
+        if dash_host is not None:
+            ok, err = validate_hostname(dash_host)
+            if not ok:
+                errors.append(ConfigValidationError("dashboard.host", err))
+
+    return errors
+
+
+# ── Config Templates ───────────────────────────────────────────
+
+def config_template_serial(name="Supervisor NOC", port=None):
+    """Generate a serial/USB gateway config template.
+
+    Args:
+        name: Gateway display name.
+        port: Serial port (e.g. '/dev/ttyUSB0'). None for auto-detect.
+    """
+    cfg = {
+        "gateway": {
+            "name": name,
+            "connection_type": "serial",
+            "port": port or "/dev/ttyUSB0",
+            "bitrate": 500,
+            "rns_configdir": None,
+            "structured_logging": False,
+        },
+        "dashboard": {
+            "host": "127.0.0.1",
+            "port": 5000,
+        },
+        "features": {
+            "circuit_breaker": True,
+            "tx_queue": True,
+        },
+    }
+    return cfg
+
+
+def config_template_tcp(name="Supervisor NOC", host="localhost", tcp_port=4403):
+    """Generate a TCP (meshtasticd) gateway config template.
+
+    Args:
+        name: Gateway display name.
+        host: meshtasticd hostname/IP.
+        tcp_port: meshtasticd port.
+    """
+    cfg = {
+        "gateway": {
+            "name": name,
+            "connection_type": "tcp",
+            "host": host,
+            "tcp_port": tcp_port,
+            "bitrate": 500,
+            "rns_configdir": None,
+            "structured_logging": False,
+        },
+        "dashboard": {
+            "host": "127.0.0.1",
+            "port": 5000,
+        },
+        "features": {
+            "circuit_breaker": True,
+            "tx_queue": True,
+        },
+    }
     return cfg

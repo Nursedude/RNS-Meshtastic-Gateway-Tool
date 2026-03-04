@@ -279,13 +279,21 @@ def validate_config_strict(cfg):
     # Feature flags
     features = cfg.get("features", {})
     if isinstance(features, dict):
-        for flag in ("circuit_breaker", "tx_queue"):
+        for flag in ("circuit_breaker", "tx_queue", "message_queue"):
             val = features.get(flag)
             if val is not None and not isinstance(val, bool):
                 errors.append(ConfigValidationError(
                     f"features.{flag}",
                     f"must be true or false, got {type(val).__name__}",
                 ))
+
+        # Mutual exclusivity warning
+        if features.get("message_queue") and features.get("tx_queue"):
+            errors.append(ConfigValidationError(
+                "features",
+                "message_queue subsumes tx_queue; both enabled is redundant",
+                severity="warning",
+            ))
 
     # Dashboard
     dash = cfg.get("dashboard", {})

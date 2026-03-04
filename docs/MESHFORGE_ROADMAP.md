@@ -2,86 +2,47 @@
 
 ## Context
 
-MeshForge (Nursedude/meshforge) has evolved significantly since the last round of improvements were ported to RNS-Meshtastic-Gateway-Tool. This plan identifies meaningful features and reliability patterns to port across 4 sessions, prioritized by impact and dependency order.
+MeshForge (Nursedude/meshforge) has evolved significantly since the last round of improvements were ported to RNS-Meshtastic-Gateway-Tool. This roadmap tracks the porting of meaningful features and reliability patterns across 4 sessions, prioritized by impact and dependency order.
 
-**Current state of Gateway Tool:** v1.5 with circuit breaker, TX queue, reconnect strategy, slow-start recovery, bridge health monitor, active health probe, thread manager, structured logging, TUI, web dashboard, and comprehensive test suite (17 test files).
+**Current state of Gateway Tool:** v1.5+ with circuit breaker, TX queue, reconnect strategy, slow-start recovery, bridge health monitor, active health probe, thread manager, structured logging, TUI, web dashboard, centralized timeouts, event bus, enhanced config validation, and comprehensive test suite (19 test files).
 
-**Key gaps vs MeshForge:** No persistent message queue, no event bus, no centralized timeouts, no daemon/systemd mode, no MQTT bridge mode, limited config validation.
-
----
-
-## Session 1: Foundation Layer (This Session)
-
-Quick-win infrastructure that later sessions depend on.
-
-### 1a. Centralized Timeout Constants (~30 min)
-
-**Why:** Magic numbers scattered across codebase make tuning difficult. Every subsequent feature (daemon, message queue) needs defined timeouts.
-
-- Create `src/utils/timeouts.py` modeled on `/tmp/meshforge/src/utils/timeouts.py`
-- Extract existing timeouts from:
-  - `launcher.py:33` → `HEALTH_CHECK_INTERVAL = 30`
-  - `src/utils/circuit_breaker.py` → recovery_timeout (30.0)
-  - `src/utils/reconnect.py` → initial_delay (2.0), max_delay (60.0)
-  - `src/utils/health_probe.py` → interval (30)
-  - `src/utils/threads.py` → join timeout (5.0)
-  - `src/utils/tx_queue.py` → inter-packet delays
-- Add Gateway-Tool-relevant constants:
-  - `SUBPROCESS_QUICK`, `SUBPROCESS_DEFAULT` for service_check calls
-  - `TCP_CONNECT` for meshtasticd connection
-  - `THREAD_JOIN`, `THREAD_JOIN_LONG`
-  - `CIRCUIT_RECOVERY`
-  - `HEALTH_CHECK_INTERVAL`
-- Update imports in existing modules to reference `timeouts.py`
-
-### 1b. Event Bus System (~1.5 hours)
-
-**Why:** Enables real-time dashboard updates and decoupled component communication. Foundation for persistent message queue integration.
-
-- Create `src/utils/event_bus.py` adapted from `/tmp/meshforge/src/utils/event_bus.py`
-- Include: `EventBus` class with thread-safe pub/sub, bounded ThreadPoolExecutor (4 workers)
-- Event types for Gateway Tool scope:
-  - `MessageEvent` — TX/RX messages (direction, content, node_id, network)
-  - `ServiceEvent` — service availability changes
-- Include convenience functions: `emit_message()`, `emit_service_status()`
-- Drop MeshForge-specific types not applicable here (TacticalEvent, NodeEvent)
-- Wire into `Meshtastic_Interface.py`:
-  - `on_receive()` → emit RX message event
-  - `_do_send()` → emit TX message event
-- Wire into `launcher.py`:
-  - Service status changes → emit service events
-- Add `event_bus.shutdown()` to launcher's clean shutdown path
-
-### 1c. Enhanced Config Validation (~1.5 hours)
-
-**Why:** Configuration errors currently cascade into cryptic runtime failures. Templates give new users a working starting point.
-
-- Enhance `src/utils/common.py`:
-  - Add `ConfigValidationError` dataclass with severity levels (error, warning, info)
-  - Add `validate_config()` returning structured errors instead of string list
-  - Add bitrate-specific validation (warn if unusually low/high for LoRa)
-  - Add feature flag validation (circuit_breaker, tx_queue must be bool)
-- Add config templates as class methods or factory functions:
-  - `template_serial()` — Serial/USB connection (most common)
-  - `template_tcp()` — TCP to meshtasticd
-- Update `config.json.example` with inline comments for all fields
-
-### 1d. Tests for all Session 1 additions (~1 hour)
-
-- `tests/test_timeouts.py` — verify constants exist and have sane values
-- `tests/test_event_bus.py` — subscribe/emit/unsubscribe, thread safety, shutdown
-- Update `tests/test_common.py` — new validation rules, templates, severity
-
-### 1e. Verification
-
-- Run `python -m pytest tests/ -v` — all tests pass
-- Run `ruff check src/ launcher.py` — no lint errors
-- Verify `python -c "from src.utils.timeouts import *; print('OK')"` works
-- Verify `python -c "from src.utils.event_bus import event_bus; print('OK')"` works
+**Completed:** Session 1 — Foundation Layer (commit `dc1e7d7`)
+**Remaining gaps vs MeshForge:** No persistent message queue, no daemon/systemd mode, no MQTT bridge mode, no node tracking.
 
 ---
 
-## Session 2: Persistent Message Queue + Daemon Mode
+## Session 1: Foundation Layer — COMPLETED
+
+> Delivered in commit `dc1e7d7`. Quick-win infrastructure that later sessions depend on.
+
+### What Was Delivered
+
+- **Centralized Timeout Constants** (`src/utils/timeouts.py`) — Replaced scattered magic numbers with named constants (`HEALTH_CHECK_INTERVAL`, `SUBPROCESS_QUICK`, `SUBPROCESS_DEFAULT`, `TCP_CONNECT`, `TCP_PREFLIGHT`, `CIRCUIT_RECOVERY`, `CIRCUIT_FAILURE_THRESHOLD`, `RECONNECT_INITIAL_DELAY`, `RECONNECT_MAX_DELAY`, `SLOW_START_DURATION`, `THREAD_JOIN`, `THREAD_JOIN_LONG`, `TX_QUEUE_MAXSIZE`, `TX_QUEUE_POLL`, `DASHBOARD_REFRESH`). Updated imports in `circuit_breaker.py`, `health_probe.py`, `threads.py`, `tx_queue.py`, `service_check.py`, and `launcher.py`.
+- **Event Bus System** (`src/utils/event_bus.py`) — Thread-safe pub/sub with bounded ThreadPoolExecutor (4 workers). `MessageEvent` and `ServiceEvent` types. Convenience functions: `emit_message()`, `emit_service_status()`. Wired into `Meshtastic_Interface.py` (RX/TX paths) and `launcher.py` (service status, clean shutdown).
+- **Enhanced Config Validation** (`src/utils/common.py`) — `ConfigValidationError` dataclass with severity levels (error/warning/info). Structured `validate_config()` returning typed errors. Bitrate and feature-flag validation. Config templates: `template_serial()`, `template_tcp()`.
+- **Tests** — 2 new test files (`test_timeouts.py`, `test_event_bus.py`), expanded `test_common.py`. 50+ new test cases. 19 test files total, all passing.
+
+### Files Changed
+
+| Action | File |
+|--------|------|
+| CREATE | `src/utils/timeouts.py` |
+| CREATE | `src/utils/event_bus.py` |
+| CREATE | `tests/test_timeouts.py` |
+| CREATE | `tests/test_event_bus.py` |
+| MODIFY | `src/utils/common.py` (enhanced validation) |
+| MODIFY | `src/Meshtastic_Interface.py` (emit events) |
+| MODIFY | `src/utils/circuit_breaker.py` (use timeout constants) |
+| MODIFY | `src/utils/health_probe.py` (use timeout constants) |
+| MODIFY | `src/utils/service_check.py` (use timeout constants) |
+| MODIFY | `src/utils/threads.py` (use timeout constants) |
+| MODIFY | `src/utils/tx_queue.py` (use timeout constants) |
+| MODIFY | `launcher.py` (emit events, use timeouts) |
+| MODIFY | `tests/test_common.py` (new validation tests) |
+
+---
+
+## Session 2: Persistent Message Queue + Daemon Mode (Next Session)
 
 ### 2a. Persistent Message Queue
 
@@ -180,7 +141,7 @@ Quick-win infrastructure that later sessions depend on.
 
 ## Files Modified/Created Per Session
 
-### Session 1 (This Session)
+### Session 1 (Completed — commit `dc1e7d7`)
 | Action | File |
 |--------|------|
 | CREATE | `src/utils/timeouts.py` |
@@ -190,11 +151,11 @@ Quick-win infrastructure that later sessions depend on.
 | MODIFY | `src/utils/common.py` (enhanced validation) |
 | MODIFY | `src/Meshtastic_Interface.py` (emit events) |
 | MODIFY | `src/utils/circuit_breaker.py` (use timeout constants) |
-| MODIFY | `src/utils/reconnect.py` (use timeout constants) |
 | MODIFY | `src/utils/health_probe.py` (use timeout constants) |
+| MODIFY | `src/utils/service_check.py` (use timeout constants) |
 | MODIFY | `src/utils/threads.py` (use timeout constants) |
+| MODIFY | `src/utils/tx_queue.py` (use timeout constants) |
 | MODIFY | `launcher.py` (emit events, use timeouts) |
-| MODIFY | `config.json.example` (updated template) |
 | MODIFY | `tests/test_common.py` (new validation tests) |
 
 ### Session 2

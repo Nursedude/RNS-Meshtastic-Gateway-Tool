@@ -180,8 +180,15 @@ def render_dashboard():
         dash = cfg.get('dashboard', {})
         conn_type = gw.get('connection_type', 'serial')
         print(box_kv("Node Name", gw.get('name', '(unset)'), w))
+        bridge_mode = gw.get('bridge_mode', 'direct')
+        print(box_kv("Bridge Mode", bridge_mode, w))
         print(box_kv("Connection", conn_type, w))
-        if conn_type == "tcp":
+        if bridge_mode == "mqtt":
+            mqtt_host = gw.get('mqtt_host', 'localhost')
+            mqtt_port = gw.get('mqtt_port', 1883)
+            print(box_kv("MQTT Broker", f"{mqtt_host}:{mqtt_port}", w))
+            print(box_kv("HTTP API", f":{gw.get('http_api_port', 9443)}", w))
+        elif conn_type == "tcp":
             print(box_kv("TCP Host", f"{gw.get('host', 'localhost')}:{gw.get('tcp_port', 4403)}", w))
         else:
             print(box_kv("Radio Port", gw.get('port', '(unset)'), w))
@@ -199,6 +206,33 @@ def render_dashboard():
         print(box_row(f"{C.DIM}Expected at: {CONFIG_PATH}{C.RST}", w))
     print(box_bot(w))
     print()
+
+    # ── Node Tracker Panel (Session 4) ──
+    try:
+        from src.utils.node_tracker import NodeTracker
+        tracker = NodeTracker()
+        nodes = tracker.get_all_nodes()
+        print(box_top(w))
+        print(box_section("KNOWN NODES", w))
+        print(box_kv("Total Nodes", str(len(nodes)), w))
+        if nodes:
+            import time as _time
+            print(box_mid(w))
+            for node in nodes[:5]:
+                name = node.get("node_name") or node.get("node_id", "?")
+                ago = _time.time() - node.get("last_seen", 0)
+                if ago < 60:
+                    seen = f"{ago:.0f}s ago"
+                elif ago < 3600:
+                    seen = f"{ago / 60:.0f}m ago"
+                else:
+                    seen = f"{ago / 3600:.1f}h ago"
+                snr = f"{node['snr']:.1f}dB" if node.get("snr") is not None else "-"
+                print(box_kv(name[:20], f"seen {seen}  SNR {snr}", w))
+        print(box_bot(w))
+        print()
+    except Exception:  # noqa: S110
+        pass  # Node tracker not available in standalone mode
 
 
 # ── Entry Point ──────────────────────────────────────────────

@@ -58,19 +58,30 @@ def start_gateway(debug=False):
     rns_configdir = gw_config.get("rns_configdir", None)
     rns_connection = RNS.Reticulum(configdir=rns_configdir)
 
-    log.info("Loading Interface 'Meshtastic Radio'...")
-
     # 2. Create reliability components before driver (MeshForge pattern)
     strategy = ReconnectStrategy.for_meshtastic()
     bridge_health = BridgeHealthMonitor()
 
-    # Instantiate the Driver with bridge health + slow-start wiring
-    mesh_interface = MeshtasticInterface(
-        rns_connection, "Meshtastic Radio",
-        config=gw_config,
-        bridge_health=bridge_health,
-        inter_packet_delay_fn=strategy.inter_packet_delay,
-    )
+    # 2a. Bridge mode selection (Session 3: MQTT bridge support)
+    bridge_mode = gw_config.get("bridge_mode", "direct")
+
+    if bridge_mode == "mqtt":
+        log.info("Loading Interface 'MQTT Bridge'...")
+        from src.mqtt_bridge import MqttBridge
+        mesh_interface = MqttBridge(
+            rns_connection, "Meshtastic Radio (MQTT)",
+            config=gw_config,
+            bridge_health=bridge_health,
+            inter_packet_delay_fn=strategy.inter_packet_delay,
+        )
+    else:
+        log.info("Loading Interface 'Meshtastic Radio'...")
+        mesh_interface = MeshtasticInterface(
+            rns_connection, "Meshtastic Radio",
+            config=gw_config,
+            bridge_health=bridge_health,
+            inter_packet_delay_fn=strategy.inter_packet_delay,
+        )
 
     if mesh_interface.online:
         bridge_health.record_connection_event("meshtastic", "connected")
@@ -78,6 +89,11 @@ def start_gateway(debug=False):
     else:
         log.warning("Initial connection failed. Will retry...")
         emit_service_status("meshtastic", False, "initial connection failed")
+
+    # 2b. Node tracker (Session 4)
+    from src.utils.node_tracker import NodeTracker
+    node_tracker = NodeTracker()
+    node_tracker.start()
 
     # 3. Active health probe with hysteresis (MeshForge pattern)
     #    3 consecutive failures before marking unhealthy (prevents false positives)
@@ -151,8 +167,9 @@ def start_gateway(debug=False):
     except KeyboardInterrupt:
         log.info("Shutting down gateway...")
 
-    # Clean shutdown (MeshForge pattern: stop probes → detach → event bus → threads)
+    # Clean shutdown (MeshForge pattern: stop probes → tracker → detach → event bus → threads)
     health_probe.stop()
+    node_tracker.stop()
     mesh_interface.detach()
     event_bus.shutdown()
     shutdown_all_threads()

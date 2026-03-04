@@ -76,6 +76,7 @@
             <tr><td>Node Name</td><td>{{ gw_name }}</td></tr>
             <tr><td>Radio Port</td><td>{{ gw_port }}</td></tr>
             <tr><td>Connection</td><td>{{ gw_connection }}</td></tr>
+            <tr><td>Bridge Mode</td><td>{{ bridge_mode }}</td></tr>
             <tr><td>Bitrate</td><td>{{ gw_bitrate }} bps</td></tr>
         </table>
         {% else %}
@@ -84,6 +85,70 @@
         {% endif %}
     </div>
 
+    <div class="card">
+        <h3>Bridge Health</h3>
+        <table>
+            <tr>
+                <td>Status</td>
+                <td>
+                    {% if bridge_status == 'healthy' %}<span class="ok">HEALTHY</span>
+                    {% elif bridge_status == 'degraded' %}<span style="color:#ffaa00;font-weight:bold">DEGRADED</span>
+                    {% elif bridge_status == 'offline' %}<span class="err">OFFLINE</span>
+                    {% else %}<span class="dim">{{ bridge_status }}</span>
+                    {% endif %}
+                </td>
+            </tr>
+            <tr><td>Known Nodes</td><td>{{ node_count }}</td></tr>
+        </table>
+    </div>
+
+    <div class="card">
+        <h3>Recent Messages</h3>
+        <div id="msg-feed"><p class="dim">Loading...</p></div>
+    </div>
+
+    <div class="card">
+        <h3>Known Nodes</h3>
+        <div id="node-list"><p class="dim">Loading...</p></div>
+    </div>
+
     <p class="dim">Auto-refreshes every 30s</p>
+
+    <script>
+    function fetchMessages() {
+        fetch('/api/messages').then(r => r.json()).then(msgs => {
+            const el = document.getElementById('msg-feed');
+            if (!msgs.length) { el.innerHTML = '<p class="dim">No messages yet</p>'; return; }
+            const rows = msgs.slice(-10).reverse().map(m => {
+                const arrow = m.direction === 'rx' ? '&larr;' : '&rarr;';
+                const node = m.node_id || '?';
+                return '<tr><td>' + m.timestamp.split('T')[1].split('.')[0] + '</td>' +
+                       '<td>' + arrow + '</td><td>' + node + '</td>' +
+                       '<td>' + (m.content || '').substring(0, 40) + '</td></tr>';
+            });
+            el.innerHTML = '<table>' + rows.join('') + '</table>';
+        }).catch(() => {});
+    }
+    function fetchNodes() {
+        fetch('/api/nodes').then(r => r.json()).then(nodes => {
+            const el = document.getElementById('node-list');
+            if (!nodes.length) { el.innerHTML = '<p class="dim">No nodes tracked yet</p>'; return; }
+            const rows = nodes.slice(0, 10).map(n => {
+                const seen = new Date(n.last_seen * 1000).toLocaleTimeString();
+                const name = n.node_name || n.node_id;
+                const snr = n.snr != null ? n.snr.toFixed(1) + ' dB' : '-';
+                return '<tr><td>' + name + '</td><td>' + seen + '</td>' +
+                       '<td>' + snr + '</td></tr>';
+            });
+            el.innerHTML = '<table><tr><td style="color:#00ccff">Node</td>' +
+                           '<td style="color:#00ccff">Last Seen</td>' +
+                           '<td style="color:#00ccff">SNR</td></tr>' +
+                           rows.join('') + '</table>';
+        }).catch(() => {});
+    }
+    fetchMessages(); fetchNodes();
+    setInterval(fetchMessages, 10000);
+    setInterval(fetchNodes, 30000);
+    </script>
 </body>
 </html>

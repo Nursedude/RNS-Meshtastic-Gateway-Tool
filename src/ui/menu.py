@@ -20,15 +20,49 @@ from src.ui.widgets import (
 from src.utils.common import CONFIG_PATH, NOMAD_CONFIG, RNS_CONFIG_FILE, load_config, validate_port
 from src.utils.log import setup_logging, default_log_path, install_crash_handler
 from src.utils.service_check import check_rnsd_status, check_meshtasticd_status
+from src.utils.timeouts import STATUS_CACHE_TTL
 
 log = logging.getLogger("menu")
 
 
+# ── Service Status Cache (MeshForge StatusBar pattern) ───────
+class _StatusCache:
+    """TTL cache for service status checks.
+
+    Avoids shelling out to pgrep/systemctl on every menu redraw.
+    Noticeably faster on Raspberry Pi hardware.
+    """
+
+    def __init__(self, ttl=STATUS_CACHE_TTL):
+        self._ttl = ttl
+        self._cache = {}  # key -> (timestamp, value)
+
+    def get(self, key, check_fn):
+        """Return cached result or call *check_fn* if stale/missing."""
+        now = time.time()
+        entry = self._cache.get(key)
+        if entry and (now - entry[0]) < self._ttl:
+            return entry[1]
+        result = check_fn()
+        self._cache[key] = (now, result)
+        return result
+
+    def invalidate(self, key=None):
+        """Clear one key or the entire cache."""
+        if key:
+            self._cache.pop(key, None)
+        else:
+            self._cache.clear()
+
+
+_status_cache = _StatusCache()
+
+
 # ── Service Status ───────────────────────────────────────────
 def _service_status_line():
-    """Quick service status for banner display (MeshForge StatusBar pattern)."""
-    rnsd_ok, _ = check_rnsd_status()
-    meshd_ok, _ = check_meshtasticd_status()
+    """Quick service status for banner display (cached, 10s TTL)."""
+    rnsd_ok, _ = _status_cache.get("rnsd", check_rnsd_status)
+    meshd_ok, _ = _status_cache.get("meshtasticd", check_meshtasticd_status)
     rnsd_tag = f"{C.GRN}●{C.RST}" if rnsd_ok else f"{C.DIM}○{C.RST}"
     meshd_tag = f"{C.GRN}●{C.RST}" if meshd_ok else f"{C.DIM}○{C.RST}"
     return f"rnsd {rnsd_tag}  meshtasticd {meshd_tag}"
@@ -195,6 +229,11 @@ def print_menu():
 # ── Main Loop ────────────────────────────────────────────────
 def main_menu():
     python = get_python()
+
+    # One-shot environment check (MeshForge startup_checks pattern)
+    from src.ui.preflight import startup_preflight
+    startup_preflight()
+
     while True:
         try:
             cfg = load_config(fallback={
@@ -207,18 +246,32 @@ def main_menu():
             choice = input(f"\n  {C.CYN}Supervisor ▸{C.RST} ").strip().lower()
 
             if choice == '1':
+                # Pre-launch conflict check (MeshForge conflict_resolver pattern)
+                from src.ui.preflight import check_port_conflicts
+                conflicts = check_port_conflicts(cfg)
+                if conflicts:
+                    print(f"\n  {C.YLW}{C.BOLD}  Port conflicts detected:{C.RST}")
+                    for port, desc, detail in conflicts:
+                        print(f"  {C.YLW}    :{port} — {desc}{C.RST}")
+                        print(f"  {C.DIM}    {detail}{C.RST}")
+                    answer = input(f"\n  {C.CYN}  Launch anyway? [y/N]{C.RST} ").strip().lower()
+                    if answer != 'y':
+                        continue
                 launcher = os.path.join(BASE_DIR, 'launcher.py')
-                launch_detached([python, launcher])
-                print(f"  {C.GRN}  Gateway launched.{C.RST}")
+                if launch_detached([python, launcher]):
+                    _status_cache.invalidate()
+                    print(f"  {C.GRN}  Gateway launched.{C.RST}")
                 time.sleep(1)
             elif choice == '2':
                 nomadnet = shutil.which('nomadnet')
                 if nomadnet:
-                    launch_detached([nomadnet])
-                    print(f"  {C.GRN}  NomadNet launched.{C.RST}")
+                    if launch_detached([nomadnet]):
+                        _status_cache.invalidate()
+                        print(f"  {C.GRN}  NomadNet launched.{C.RST}")
                 else:
-                    launch_detached([python, '-m', 'nomadnet'])
-                    print(f"  {C.GRN}  NomadNet launched (module mode).{C.RST}")
+                    if launch_detached([python, '-m', 'nomadnet']):
+                        _status_cache.invalidate()
+                        print(f"  {C.GRN}  NomadNet launched (module mode).{C.RST}")
                 time.sleep(1)
             elif choice == '3':
                 dash_port = cfg.get('dashboard', {}).get('port', 5000)

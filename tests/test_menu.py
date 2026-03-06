@@ -9,7 +9,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
-from src.ui.menu import get_editor, get_python, clear_screen, launch_detached, _parse_args
+from src.ui.menu import get_editor, get_python, clear_screen, launch_detached, _parse_args, _StatusCache
 
 
 class TestGetEditor:
@@ -114,3 +114,50 @@ class TestParseArgs:
         """--version should cause SystemExit."""
         with pytest.raises(SystemExit):
             _parse_args(['--version'])
+
+
+class TestStatusCache:
+    """Tests for TTL-based service status cache."""
+
+    def test_caches_result_within_ttl(self):
+        """Second call within TTL returns cached value without calling check_fn."""
+        cache = _StatusCache(ttl=10.0)
+        call_count = [0]
+
+        def check():
+            call_count[0] += 1
+            return (True, "running")
+
+        cache.get("test", check)
+        cache.get("test", check)
+        assert call_count[0] == 1
+
+    def test_expires_after_ttl(self):
+        """After TTL expires, check_fn is called again."""
+        cache = _StatusCache(ttl=0.0)  # Immediate expiry
+        call_count = [0]
+
+        def check():
+            call_count[0] += 1
+            return (True, "running")
+
+        cache.get("test", check)
+        cache.get("test", check)
+        assert call_count[0] == 2
+
+    def test_invalidate_single_key(self):
+        """invalidate(key) clears only that key."""
+        cache = _StatusCache(ttl=60.0)
+        cache.get("a", lambda: (True, "ok"))
+        cache.get("b", lambda: (True, "ok"))
+        cache.invalidate("a")
+        assert "a" not in cache._cache
+        assert "b" in cache._cache
+
+    def test_invalidate_all(self):
+        """invalidate() with no args clears all entries."""
+        cache = _StatusCache(ttl=60.0)
+        cache.get("a", lambda: (True, "ok"))
+        cache.get("b", lambda: (True, "ok"))
+        cache.invalidate()
+        assert cache._cache == {}

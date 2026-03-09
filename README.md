@@ -75,6 +75,31 @@ cp config.json.example config.json
 
 If no serial port is set, the tool auto-detects connected devices.
 
+### Setup at a Glance
+
+```mermaid
+flowchart TD
+    A["Clone repository"] --> B["pip install -r requirements.txt"]
+    B --> C["cp config.json.example config.json"]
+    C --> D{"Connection type?"}
+
+    D -->|"USB radio attached"| E["serial mode<br/>Set gateway.port"]
+    D -->|"meshtasticd on network"| F["tcp mode<br/>Set host + tcp_port"]
+    D -->|"Zero-interference"| G["mqtt mode<br/>Set mqtt_host + mqtt_port"]
+
+    E --> H{"Launch mode?"}
+    F --> H
+    G --> H
+
+    H -->|"Interactive"| I["python src/ui/menu.py<br/>Command Center TUI"]
+    H -->|"Direct"| J["python launcher.py --debug"]
+    H -->|"Service"| K["systemd daemon"]
+    H -->|"Browser"| L["python src/monitoring/web_dashboard.py"]
+
+    K --> M["Copy meshgateway.service to /etc/systemd/system/"]
+    M --> N["systemctl enable --now meshgateway"]
+```
+
 ## Usage
 
 ### Command Center (recommended)
@@ -110,15 +135,63 @@ Opens a browser dashboard at `http://127.0.0.1:5000` with system status, known n
 
 ## Architecture
 
-```
-┌──────────────┐     ┌─────────────────────┐     ┌──────────────┐
-│   RNS Apps   │────▸│  Meshtastic_Interface│────▸│  LoRa Radio  │
-│  (Sideband,  │◂────│  (RNS driver)        │◂────│  (Meshtastic)│
-│   NomadNet)  │     └─────────────────────┘     └──────────────┘
-└──────────────┘              │
-                              ├─ Serial/USB (direct)
-                              ├─ TCP via meshtasticd
-                              └─ MQTT bridge (zero-interference)
+```mermaid
+graph TB
+    subgraph Apps["RNS Applications"]
+        SB["Sideband"]
+        NN["NomadNet"]
+        LX["LXMF"]
+    end
+
+    subgraph Interface["Gateway Bridge"]
+        MI["MeshtasticInterface<br/>Direct Mode"]
+        MB["MqttBridge<br/>MQTT Mode"]
+    end
+
+    subgraph Radio["LoRa Radio"]
+        LR["Meshtastic Device"]
+    end
+
+    SB & NN & LX --> MI & MB
+    MI --> LR
+    MB --> LR
+
+    subgraph Connections["Connection Modes"]
+        S["Serial / USB"]
+        T["TCP via meshtasticd"]
+        M["MQTT Broker"]
+    end
+
+    MI --- S
+    MI --- T
+    MB --- M
+
+    subgraph Reliability["Reliability Layer"]
+        CB["Circuit Breaker"]
+        HP["Health Probe"]
+        RS["Reconnect Strategy"]
+        TQ["TX Queue"]
+    end
+
+    MI -.-> CB & HP & RS & TQ
+
+    subgraph Services["Background Services"]
+        EB["Event Bus"]
+        NT["Node Tracker"]
+        BH["Bridge Health Monitor"]
+    end
+
+    EB -.-> MI & MB
+    NT -.-> MI
+    BH -.-> MI
+
+    subgraph UI["User Interfaces"]
+        CC["Command Center TUI"]
+        TD["Terminal Dashboard"]
+        WD["Web Dashboard"]
+    end
+
+    EB -.-> CC & TD & WD
 ```
 
 **Core modules:**
@@ -140,6 +213,78 @@ Opens a browser dashboard at `http://127.0.0.1:5000` with system status, known n
 - Active health probe with hysteresis
 - Event bus for decoupled RX/TX notifications
 - Node tracker with JSON persistence
+
+### Gateway Lifecycle
+
+```mermaid
+flowchart TD
+    A["Load config.json"] --> B["Initialize Reticulum"]
+    B --> C{"bridge_mode?"}
+    C -->|direct| D["Create MeshtasticInterface"]
+    C -->|mqtt| E["Create MqttBridge"]
+    D --> F["Start ReconnectStrategy + BridgeHealthMonitor"]
+    E --> F
+    F --> G["Start NodeTracker thread"]
+    G --> H["Start ActiveHealthProbe thread"]
+    H --> I["Register signal handlers"]
+    I --> J{"Interface online?"}
+
+    J -->|Yes| K["Record success / reset backoff"]
+    K --> L{"Health probe OK?"}
+    L -->|Yes| M["Sleep 1s"]
+    M --> J
+    L -->|"Sustained failure"| N["Mark interface offline"]
+    N --> J
+
+    J -->|No| O{"Retries left?"}
+    O -->|Yes| P["Wait — exponential backoff + jitter"]
+    P --> Q["Attempt reconnect"]
+    Q -->|Success| K
+    Q -->|Fail| J
+    O -->|No| R["Reset strategy / long wait"]
+    R --> J
+
+    J -. "SIGTERM / Ctrl+C" .-> S["Shutdown"]
+    S --> T["Stop health probe"]
+    T --> U["Stop node tracker"]
+    U --> V["Detach interface"]
+    V --> W["Shutdown event bus + threads"]
+    W --> X["Exit"]
+```
+
+### Packet Flow
+
+```mermaid
+sequenceDiagram
+    participant App as RNS App
+    participant RNS as Reticulum Transport
+    participant IF as MeshtasticInterface
+    participant CB as Circuit Breaker
+    participant TQ as TX Queue
+    participant Radio as LoRa Radio
+    participant EB as Event Bus
+
+    Note over App, Radio: TX Path — RNS to Mesh
+    App->>RNS: Send packet
+    RNS->>IF: process_incoming(data)
+    IF->>CB: allow_request()?
+    alt Circuit OPEN
+        CB-->>IF: Blocked
+        IF-->>RNS: Drop + log warning
+    else Circuit CLOSED
+        CB-->>IF: Allowed
+        IF->>TQ: enqueue(data)
+        TQ->>Radio: sendData(payload)
+        TQ->>EB: emit tx MessageEvent
+    end
+
+    Note over App, Radio: RX Path — Mesh to RNS
+    Radio->>IF: on_receive(packet)
+    IF->>IF: Extract decoded payload
+    IF->>EB: emit rx MessageEvent
+    IF->>RNS: owner.inbound(payload)
+    RNS->>App: Deliver to destination
+```
 
 ## Connection Modes
 
@@ -217,17 +362,27 @@ Key points:
 
 ## Roadmap
 
-- [x] Basic TX/RX over Meshtastic
-- [x] Command Center TUI
-- [x] Terminal and web dashboards
-- [x] Cross-platform support (Linux, Windows, macOS)
-- [x] TCP connection mode (meshtasticd)
-- [x] MQTT bridge mode
-- [x] Circuit breaker and TX queue
-- [x] Node tracking with persistence
-- [x] Daemon mode with watchdog
-- [x] Startup preflight checks and port conflict detection
-- [ ] Multi-node mesh testing
-- [ ] Packet acknowledgement handling
-- [ ] Message delivery confirmation
-- [ ] Performance profiling on Raspberry Pi
+```mermaid
+gantt
+    title Project Roadmap
+    dateFormat YYYY-MM-DD
+    axisFormat %b %Y
+
+    section Completed
+    Basic TX/RX over Meshtastic          :done, tx,     2024-06-01, 30d
+    Command Center TUI                   :done, tui,    after tx, 30d
+    Terminal + Web Dashboards            :done, dash,   after tui, 21d
+    Cross-platform Support               :done, cross,  after dash, 14d
+    TCP Connection Mode                  :done, tcp,    after cross, 21d
+    MQTT Bridge Mode                     :done, mqtt,   after tcp, 21d
+    Circuit Breaker + TX Queue           :done, cb,     after mqtt, 21d
+    Node Tracking + Persistence          :done, nt,     after cb, 14d
+    Daemon Mode + Watchdog               :done, daemon, after nt, 14d
+    Preflight Checks + Port Detection    :done, pre,    after daemon, 14d
+
+    section Next Up
+    Multi-node Mesh Testing              :active, multi,   2025-06-01, 60d
+    Packet Acknowledgement Handling      :         ack,     after multi, 45d
+    Message Delivery Confirmation        :         confirm, after ack, 45d
+    RPi Performance Profiling            :         rpi,     after confirm, 30d
+```

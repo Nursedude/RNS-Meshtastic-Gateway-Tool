@@ -10,6 +10,7 @@ import os
 
 from src.ui.widgets import C
 from src.utils.common import CONFIG_PATH, load_config, validate_config
+from src.utils.common import RNS_CONFIG_DIR
 from src.utils.service_check import (
     check_meshtastic_lib,
     check_rns_config,
@@ -29,6 +30,17 @@ def startup_preflight():
     (empty list = all clear).  Also prints them to stdout with colour.
     """
     warnings = []
+
+    # 0. First-run detection (MeshForge startup_checks pattern)
+    rns_found_early, _ = check_rns_config()
+    if not os.path.isfile(CONFIG_PATH) and not rns_found_early:
+        print()
+        print(f"  {C.CYN}{C.BOLD}  Welcome to Supervisor NOC!{C.RST}")
+        print(f"  {C.DIM}  This appears to be your first run. Quick setup:{C.RST}")
+        print(f"  {C.DIM}  1. Copy config.json.example -> config.json and edit it{C.RST}")
+        print(f"  {C.DIM}  2. Run 'rnsd' once to generate Reticulum config{C.RST}")
+        print(f"  {C.DIM}  3. Connect your Meshtastic radio via USB{C.RST}")
+        print()
 
     # 1. Config file exists and parses?
     if not os.path.isfile(CONFIG_PATH):
@@ -64,6 +76,20 @@ def startup_preflight():
     rns_found, _ = check_rns_config()
     if not rns_found:
         warnings.append("No Reticulum config found — run 'rnsd' once to generate it")
+
+    # 5. RNS storage directory writable? (MeshForge _heal_rns_storage_dirs pattern)
+    if rns_found:
+        storage_dir = os.path.join(RNS_CONFIG_DIR, "storage")
+        if os.path.isdir(storage_dir) and not os.access(storage_dir, os.W_OK):
+            warnings.append(
+                f"RNS storage dir not writable: {storage_dir} — "
+                f"fix with: sudo chown -R $USER {RNS_CONFIG_DIR}"
+            )
+        elif os.path.isdir(RNS_CONFIG_DIR) and not os.path.isdir(storage_dir):
+            warnings.append(
+                f"RNS storage dir missing: {storage_dir} — "
+                "run 'rnsd' once to initialize it"
+            )
 
     # Print warnings
     if warnings:

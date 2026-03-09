@@ -69,6 +69,19 @@ def _service_status_line():
 
 
 # ── Cross-Platform Helpers ───────────────────────────────────
+def _flush_input():
+    """Discard stale keystrokes from terminal input buffer.
+
+    Prevents phantom menu selections when the user types during
+    a subprocess (MeshForge backend.py termios pattern).
+    """
+    try:
+        import termios
+        termios.tcflush(sys.stdin.fileno(), termios.TCIFLUSH)
+    except (ImportError, OSError, ValueError):
+        pass  # Windows, piped stdin, or not a TTY — safe to skip
+
+
 def clear_screen():
     """Clear terminal without shell invocation."""
     if os.name == 'nt':
@@ -169,6 +182,8 @@ def run_tool(cmd_list, cwd=None):
         print(f"\n  {C.YLW}  Command timed out.{C.RST}")
     except OSError as e:
         print(f"\n  {C.RED}  Error: {e}{C.RST}")
+    _status_cache.invalidate()
+    _flush_input()
     input(f"\n  {C.DIM}Press Enter to continue...{C.RST}")
 
 
@@ -243,6 +258,7 @@ def main_menu():
             print_banner(cfg)
             print_menu()
 
+            _flush_input()
             choice = input(f"\n  {C.CYN}Supervisor ▸{C.RST} ").strip().lower()
 
             if choice == '1':
@@ -254,6 +270,7 @@ def main_menu():
                     for port, desc, detail in conflicts:
                         print(f"  {C.YLW}    :{port} — {desc}{C.RST}")
                         print(f"  {C.DIM}    {detail}{C.RST}")
+                    _flush_input()
                     answer = input(f"\n  {C.CYN}  Launch anyway? [y/N]{C.RST} ").strip().lower()
                     if answer != 'y':
                         continue

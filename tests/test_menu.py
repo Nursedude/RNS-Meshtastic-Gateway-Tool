@@ -9,7 +9,34 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
-from src.ui.menu import get_editor, get_python, clear_screen, launch_detached, _parse_args, _StatusCache
+from src.ui.menu import get_editor, get_python, clear_screen, launch_detached, _parse_args, _StatusCache, _flush_input
+
+
+class TestFlushInput:
+    """Tests for terminal input buffer flush (MeshForge termios pattern)."""
+
+    def test_calls_tcflush_on_posix(self):
+        """_flush_input should call termios.tcflush on POSIX systems."""
+        import termios as real_termios
+        with patch.object(real_termios, 'tcflush') as mock_flush:
+            with patch('sys.stdin') as mock_stdin:
+                mock_stdin.fileno.return_value = 0
+                _flush_input()
+        mock_flush.assert_called_once_with(0, real_termios.TCIFLUSH)
+
+    def test_suppresses_import_error(self):
+        """_flush_input should not raise when termios is unavailable (Windows)."""
+        with patch.dict('sys.modules', {'termios': None}):
+            # Should not raise
+            _flush_input()
+
+    def test_suppresses_os_error(self):
+        """_flush_input should not raise when stdin is not a TTY."""
+        mock_termios = MagicMock()
+        mock_termios.TCIFLUSH = 0
+        mock_termios.tcflush.side_effect = OSError("not a TTY")
+        with patch.dict('sys.modules', {'termios': mock_termios}):
+            _flush_input()
 
 
 class TestGetEditor:

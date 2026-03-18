@@ -154,6 +154,54 @@ class TestStartStop:
         probe.stop(timeout=2)
 
 
+class TestAnomalyDetection:
+    """Tests for MeshForge PR #1143/#1144 anomaly detection."""
+
+    def test_record_anomaly(self):
+        probe = ActiveHealthProbe(fails=1, passes=1)
+        probe.register_check("svc", _healthy_check)
+        probe.record_anomaly("svc", "zero traffic")
+        anomalies = probe.get_anomalies()
+        assert "svc" in anomalies
+        assert anomalies["svc"]["last_anomaly"] == "zero traffic"
+        assert anomalies["svc"]["anomaly_count"] == 1
+
+    def test_no_anomalies_initially(self):
+        probe = ActiveHealthProbe(fails=1, passes=1)
+        probe.register_check("svc", _healthy_check)
+        assert probe.get_anomalies() == {}
+
+    def test_interface_rx_only_anomaly(self):
+        probe = ActiveHealthProbe()
+        anomalies = probe.check_interface_anomalies({
+            "online": True, "tx_packets": 0, "rx_packets": 10,
+        })
+        assert len(anomalies) == 1
+        assert "RX-only" in anomalies[0]
+
+    def test_interface_zero_traffic_anomaly(self):
+        probe = ActiveHealthProbe()
+        anomalies = probe.check_interface_anomalies({
+            "online": True, "tx_packets": 0, "rx_packets": 0,
+        })
+        assert len(anomalies) == 1
+        assert "Zero-traffic" in anomalies[0]
+
+    def test_no_anomaly_when_offline(self):
+        probe = ActiveHealthProbe()
+        anomalies = probe.check_interface_anomalies({
+            "online": False, "tx_packets": 0, "rx_packets": 0,
+        })
+        assert anomalies == []
+
+    def test_no_anomaly_when_traffic_flowing(self):
+        probe = ActiveHealthProbe()
+        anomalies = probe.check_interface_anomalies({
+            "online": True, "tx_packets": 5, "rx_packets": 10,
+        })
+        assert anomalies == []
+
+
 class TestGetAllStatus:
     def test_returns_all_services(self):
         probe = ActiveHealthProbe(fails=1, passes=1)

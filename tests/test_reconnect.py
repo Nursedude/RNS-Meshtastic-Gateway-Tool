@@ -1,10 +1,10 @@
-"""Tests for src/utils/reconnect.py — ReconnectStrategy."""
+"""Tests for src/utils/reconnect.py — ReconnectStrategy and SlowStartRecovery."""
 import threading
 import time
 
 import pytest
 
-from src.utils.reconnect import ReconnectStrategy
+from src.utils.reconnect import ReconnectStrategy, SlowStartRecovery
 
 
 class TestGetDelay:
@@ -238,3 +238,73 @@ class TestExecuteWithRetry:
         )
         assert len(errors) == 1
         assert "bad" in errors[0]
+
+
+class TestForMqtt:
+    def test_factory_defaults(self):
+        strategy = ReconnectStrategy.for_mqtt()
+        assert strategy.initial_delay == 2.0
+        assert strategy.max_attempts == 15
+        assert strategy.slow_start_duration == 15.0
+
+
+# ── SlowStartRecovery (MeshForge pattern) ───────────────────
+class TestSlowStartRecovery:
+    def test_not_active_initially(self):
+        recovery = SlowStartRecovery()
+        assert not recovery.is_active
+        assert recovery.get_throughput_multiplier() == 1.0
+
+    def test_starts_low_after_start(self):
+        recovery = SlowStartRecovery(duration=1.0, min_factor=0.1)
+        recovery.start()
+        assert recovery.is_active
+        factor = recovery.get_throughput_multiplier()
+        assert 0.0 < factor < 0.5
+
+    def test_reaches_1_after_duration(self):
+        recovery = SlowStartRecovery(duration=0.05)
+        recovery.start()
+        time.sleep(0.06)
+        assert recovery.get_throughput_multiplier() == 1.0
+        assert not recovery.is_active
+
+    def test_stop_cancels(self):
+        recovery = SlowStartRecovery(duration=60.0)
+        recovery.start()
+        assert recovery.is_active
+        recovery.stop()
+        assert not recovery.is_active
+        assert recovery.get_throughput_multiplier() == 1.0
+
+    def test_adjusted_delay_during_ramp(self):
+        recovery = SlowStartRecovery(duration=1.0)
+        recovery.start()
+        delay = recovery.get_adjusted_delay(0.0)
+        assert delay > 0.0
+
+    def test_adjusted_delay_zero_when_inactive(self):
+        recovery = SlowStartRecovery()
+        assert recovery.get_adjusted_delay(0.0) == 0.0
+
+    def test_reset(self):
+        recovery = SlowStartRecovery(duration=60.0)
+        recovery.start()
+        assert recovery.is_active
+        recovery.reset()
+        assert not recovery.is_active
+
+    def test_for_meshtastic_factory(self):
+        r = SlowStartRecovery.for_meshtastic()
+        assert r.duration == 30.0
+        assert r.min_factor == 0.1
+
+    def test_for_rns_factory(self):
+        r = SlowStartRecovery.for_rns()
+        assert r.duration == 15.0
+        assert r.min_factor == 0.2
+
+    def test_for_mqtt_factory(self):
+        r = SlowStartRecovery.for_mqtt()
+        assert r.duration == 10.0
+        assert r.min_factor == 0.3

@@ -8,11 +8,18 @@ reconnection logic for any subsystem (Meshtastic, RNS, MQTT, etc.).
 Slow-start recovery (MeshForge pattern): after a reconnect succeeds,
 throughput ramps from 10% to 100% over a configurable duration to
 prevent flooding a recovering connection.
+
+SlowStartRecovery (MeshForge PR series): a standalone class for
+managing the slow-start ramp independently, with factory methods
+tuned for different connection types.
 """
+import logging
 import random
 import threading
 import time
 from dataclasses import dataclass, field
+
+log = logging.getLogger("reconnect")
 
 
 @dataclass
@@ -181,3 +188,108 @@ class ReconnectStrategy:
             jitter=0.10,
             max_attempts=20,
         )
+
+    @classmethod
+    def for_mqtt(cls) -> 'ReconnectStrategy':
+        """Factory: tuned defaults for MQTT broker reconnection."""
+        return cls(
+            initial_delay=2.0,
+            max_delay=60.0,
+            multiplier=2.0,
+            jitter=0.20,
+            max_attempts=15,
+            slow_start_duration=15.0,
+        )
+
+
+# ── Standalone Slow-Start Recovery (MeshForge pattern) ──────
+@dataclass
+class SlowStartRecovery:
+    """NGINX slow_start pattern: gradually increase message throughput
+    after service recovery to prevent flooding a fragile connection.
+
+    Separated from ReconnectStrategy for independent use (e.g. after
+    config reload, manual reconnect, or failover recovery).
+
+    Usage::
+
+        recovery = SlowStartRecovery.for_meshtastic()
+        recovery.start()
+        while sending:
+            factor = recovery.get_throughput_multiplier()
+            delay = recovery.get_adjusted_delay(base_delay)
+            ...
+    """
+    duration: float = 30.0
+    min_factor: float = 0.1
+
+    _start_time: float = field(default=0.0, repr=False, compare=False)
+    _active: bool = field(default=False, repr=False, compare=False)
+
+    def start(self) -> None:
+        """Begin the slow-start ramp."""
+        self._start_time = time.monotonic()
+        self._active = True
+        log.debug("Slow-start recovery started (duration=%.1fs)", self.duration)
+
+    def stop(self) -> None:
+        """Cancel slow-start (e.g. on disconnect)."""
+        self._active = False
+        self._start_time = 0.0
+
+    @property
+    def is_active(self) -> bool:
+        """True if slow-start is in progress."""
+        if not self._active:
+            return False
+        if self.duration <= 0:
+            return False
+        elapsed = time.monotonic() - self._start_time
+        if elapsed >= self.duration:
+            self._active = False
+            return False
+        return True
+
+    def get_throughput_multiplier(self) -> float:
+        """Return current throughput multiplier (min_factor → 1.0).
+
+        Linear ramp from min_factor to 1.0 over ``duration`` seconds.
+        Returns 1.0 when not active.
+        """
+        if not self.is_active:
+            return 1.0
+        elapsed = time.monotonic() - self._start_time
+        progress = min(1.0, elapsed / self.duration)
+        return self.min_factor + (1.0 - self.min_factor) * progress
+
+    def get_adjusted_delay(self, base_delay: float = 0.0) -> float:
+        """Return delay adjusted for slow-start.
+
+        During ramp-up, adds extra delay inversely proportional to
+        throughput multiplier.  Returns ``base_delay`` when not active.
+        """
+        factor = self.get_throughput_multiplier()
+        if factor >= 1.0:
+            return base_delay
+        # Extra delay: high at start, tapering to 0
+        return base_delay + max(0.0, (1.0 - factor) * 1.0)
+
+    def reset(self) -> None:
+        """Reset slow-start state."""
+        self._active = False
+        self._start_time = 0.0
+
+    @classmethod
+    def for_meshtastic(cls) -> 'SlowStartRecovery':
+        """Factory: tuned for Meshtastic radio recovery (30s ramp)."""
+        return cls(duration=30.0, min_factor=0.1)
+
+    @classmethod
+    def for_rns(cls) -> 'SlowStartRecovery':
+        """Factory: tuned for RNS transport recovery (15s ramp)."""
+        return cls(duration=15.0, min_factor=0.2)
+
+    @classmethod
+    def for_mqtt(cls) -> 'SlowStartRecovery':
+        """Factory: tuned for MQTT broker recovery (10s ramp)."""
+        return cls(duration=10.0, min_factor=0.3)

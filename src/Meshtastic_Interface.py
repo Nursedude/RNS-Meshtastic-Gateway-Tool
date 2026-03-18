@@ -33,6 +33,17 @@ if HAS_MESH_LIB:
         pass
 
 
+def _format_bytes(num_bytes: int) -> str:
+    """Format byte count with human-readable units (MeshForge PR #1143)."""
+    if num_bytes < 1024:
+        return f"{num_bytes} B"
+    elif num_bytes < 1024 * 1024:
+        return f"{num_bytes / 1024:.1f} KB"
+    elif num_bytes < 1024 * 1024 * 1024:
+        return f"{num_bytes / (1024 * 1024):.1f} MB"
+    return f"{num_bytes / (1024 * 1024 * 1024):.2f} GB"
+
+
 def _default_serial_port():
     """Return a platform-appropriate default serial port, with auto-detection."""
     try:
@@ -477,7 +488,11 @@ class MeshtasticInterface(Interface):
 
     @property
     def metrics(self) -> dict:
-        """Snapshot of interface metrics for dashboard/monitoring integration."""
+        """Snapshot of interface metrics for dashboard/monitoring integration.
+
+        Enhanced with MeshForge-style diagnostics: traffic statistics
+        with human-readable byte formatting and circuit breaker stats.
+        """
         m = {
             "tx_packets": self.tx_packets,
             "rx_packets": self.rx_packets,
@@ -485,6 +500,9 @@ class MeshtasticInterface(Interface):
             "rx_bytes": self.rxb,
             "tx_errors": self.tx_errors,
             "online": self.online,
+            "connection_type": self.connection_type,
+            "tx_bytes_human": _format_bytes(self.txb),
+            "rx_bytes_human": _format_bytes(self.rxb),
         }
         if self._message_queue:
             m["message_queue_pending"] = self._message_queue.pending_count
@@ -495,6 +513,7 @@ class MeshtasticInterface(Interface):
         if self._circuit_breaker:
             m["circuit_breaker_state"] = self._circuit_breaker.state.value
             m["circuit_breaker_failures"] = self._circuit_breaker.failures
+            m["circuit_breaker_stats"] = self._circuit_breaker.get_stats()
         return m
 
     def __str__(self):

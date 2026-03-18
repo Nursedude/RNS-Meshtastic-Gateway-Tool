@@ -1,9 +1,11 @@
-"""Tests for src.utils.bridge_health – BridgeHealthMonitor and error classification."""
+"""Tests for src.utils.bridge_health – BridgeHealthMonitor, DeliveryTracker, and error classification."""
 import time
 import pytest
 from src.utils.bridge_health import (
     BridgeHealthMonitor,
     BridgeStatus,
+    SubsystemState,
+    DeliveryTracker,
     classify_error,
 )
 
@@ -139,3 +141,124 @@ class TestBridgeHealthMonitor:
         h.record_connection_event("meshtastic", "connected")
         s = h.get_summary()
         assert s["connections"]["meshtastic"]["reconnect_count"] == 2
+
+
+# ── SubsystemState ──────────────────────────────────────────
+class TestSubsystemState:
+    def test_disconnected_when_not_connected(self):
+        h = BridgeHealthMonitor()
+        assert h.get_subsystem_state("meshtastic") == SubsystemState.DISCONNECTED
+
+    def test_healthy_when_connected(self):
+        h = BridgeHealthMonitor()
+        h.record_connection_event("meshtastic", "connected")
+        assert h.get_subsystem_state("meshtastic") == SubsystemState.HEALTHY
+
+    def test_degraded_on_high_errors(self):
+        h = BridgeHealthMonitor()
+        h.record_connection_event("meshtastic", "connected")
+        for _ in range(5):
+            h.record_error("meshtastic", TimeoutError("timed out"))
+        assert h.get_subsystem_state("meshtastic") == SubsystemState.DEGRADED
+
+    def test_summary_includes_subsystem_state(self):
+        h = BridgeHealthMonitor()
+        h.record_connection_event("meshtastic", "connected")
+        s = h.get_summary()
+        assert s["connections"]["meshtastic"]["subsystem_state"] == "healthy"
+
+
+# ── Zero-Traffic Detection ──────────────────────────────────
+class TestZeroTraffic:
+    def test_no_zero_traffic_when_disconnected(self):
+        h = BridgeHealthMonitor()
+        assert h.check_zero_traffic(min_uptime=0) == []
+
+    def test_no_zero_traffic_when_messages_flowing(self):
+        h = BridgeHealthMonitor()
+        h.record_connection_event("meshtastic", "connected")
+        h.record_message_sent("mesh_to_rns")
+        assert h.check_zero_traffic(min_uptime=0) == []
+
+    def test_detects_zero_traffic(self):
+        h = BridgeHealthMonitor()
+        h.record_connection_event("meshtastic", "connected")
+        # Fake the connection time to be old enough
+        h._last_connected["meshtastic"] = time.time() - 300
+        result = h.check_zero_traffic(min_uptime=120)
+        assert "meshtastic" in result
+
+    def test_respects_min_uptime(self):
+        h = BridgeHealthMonitor()
+        h.record_connection_event("meshtastic", "connected")
+        # Just connected — should not flag
+        assert h.check_zero_traffic(min_uptime=120) == []
+
+    def test_summary_includes_zero_traffic(self):
+        h = BridgeHealthMonitor()
+        s = h.get_summary()
+        assert "zero_traffic_services" in s
+
+
+# ── DeliveryTracker ─────────────────────────────────────────
+class TestDeliveryTracker:
+    def test_register_returns_id(self):
+        t = DeliveryTracker()
+        did = t.register("rns_to_mesh")
+        assert isinstance(did, str)
+        assert len(did) == 12
+
+    def test_confirm(self):
+        t = DeliveryTracker()
+        did = t.register()
+        assert t.confirm(did) is True
+        stats = t.get_stats()
+        assert stats["confirmed"] == 1
+        assert stats["pending"] == 0
+
+    def test_confirm_unknown_returns_false(self):
+        t = DeliveryTracker()
+        assert t.confirm("nonexistent") is False
+
+    def test_fail(self):
+        t = DeliveryTracker()
+        did = t.register()
+        assert t.fail(did, "radio timeout") is True
+        stats = t.get_stats()
+        assert stats["failed"] == 1
+
+    def test_timeout_sweep(self):
+        t = DeliveryTracker(timeout=0.01)
+        t.register()
+        time.sleep(0.02)
+        swept = t.sweep_timeouts()
+        assert swept == 1
+        stats = t.get_stats()
+        assert stats["timed_out"] == 1
+        assert stats["pending"] == 0
+
+    def test_confirmation_rate(self):
+        t = DeliveryTracker()
+        for _ in range(3):
+            did = t.register()
+            t.confirm(did)
+        did = t.register()
+        t.fail(did)
+        stats = t.get_stats()
+        assert stats["confirmation_rate"] == 75.0
+
+    def test_get_recent(self):
+        t = DeliveryTracker()
+        did = t.register()
+        t.confirm(did)
+        recent = t.get_recent(5)
+        assert len(recent) == 1
+        assert recent[0]["status"] == "confirmed"
+
+    def test_bounded_history(self):
+        t = DeliveryTracker(max_history=5)
+        for _ in range(10):
+            did = t.register()
+            t.confirm(did)
+        recent = t.get_recent(100)
+        assert len(recent) == 5

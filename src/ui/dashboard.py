@@ -207,6 +207,32 @@ def render_dashboard():
     print(box_bot(w))
     print()
 
+    # ── Interface Health Panel (MeshForge PR #1143/#1144) ──
+    try:
+        from src.utils.health_probe import get_health_probe
+        probe = get_health_probe()
+        all_status = probe.get_all_status()
+        anomalies = probe.get_anomalies()
+        if all_status or anomalies:
+            print(box_top(w))
+            print(box_section("INTERFACE HEALTH", w))
+            for svc_name, status in all_status.items():
+                state = status.get("state", "unknown")
+                color = C.GRN if state == "healthy" else (
+                    C.YLW if state == "recovering" else C.RED)
+                uptime = status.get("uptime_percent", 0)
+                print(box_kv(svc_name, f"{color}{state.upper()}{C.RST}  uptime {uptime:.0f}%", w))
+            if anomalies:
+                print(box_mid(w))
+                print(box_row(f"{C.YLW}Anomalies:{C.RST}", w))
+                for svc_name, info in anomalies.items():
+                    print(box_row(
+                        f"  {C.YLW}!{C.RST} {svc_name}: {info['last_anomaly']}", w))
+            print(box_bot(w))
+            print()
+    except Exception:  # noqa: S110
+        pass
+
     # ── Node Tracker Panel (Session 4) ──
     try:
         from src.utils.node_tracker import NodeTracker

@@ -74,6 +74,9 @@ class ServiceHealthState:
     total_checks: int = 0
     total_passes: int = 0
     total_fails: int = 0
+    # Anomaly tracking (MeshForge PR #1143/#1144)
+    last_anomaly: Optional[str] = None
+    anomaly_count: int = 0
 
     @property
     def uptime_percent(self) -> float:
@@ -317,6 +320,69 @@ class ActiveHealthProbe:
             if status:
                 result[svc] = status
         return result
+
+    # ── Anomaly Detection (MeshForge PR #1143/#1144) ────────
+    def record_anomaly(self, service_name: str, anomaly: str) -> None:
+        """Record an anomaly for a service (e.g. RX-only, zero traffic).
+
+        MeshForge PR #1143: flags conditions like RX-only interfaces
+        (potential link establishment failure) or interfaces marked UP
+        but showing no traffic activity.
+        """
+        with self._lock:
+            state = self._states.get(service_name)
+            if state:
+                state.last_anomaly = anomaly
+                state.anomaly_count += 1
+                log.warning("Anomaly on %s: %s (count: %d)",
+                            service_name, anomaly, state.anomaly_count)
+
+    def get_anomalies(self) -> Dict[str, Dict]:
+        """Return services with recorded anomalies."""
+        result = {}
+        with self._lock:
+            for name, state in self._states.items():
+                if state.anomaly_count > 0:
+                    result[name] = {
+                        "last_anomaly": state.last_anomaly,
+                        "anomaly_count": state.anomaly_count,
+                        "state": state.state.value,
+                    }
+        return result
+
+    def check_interface_anomalies(self, metrics: Dict) -> List[str]:
+        """Detect interface anomalies from metrics (MeshForge PR #1143).
+
+        Checks for:
+        - RX-only interfaces (TX=0 but RX>0 → link establishment failure)
+        - Zero-traffic on UP interfaces (green-but-dead)
+
+        Args:
+            metrics: Dict with keys like tx_packets, rx_packets, online.
+
+        Returns:
+            List of anomaly descriptions found.
+        """
+        anomalies = []
+        try:
+            online = bool(metrics.get("online", False))
+            tx = int(metrics.get("tx_packets", 0))
+            rx = int(metrics.get("rx_packets", 0))
+        except (TypeError, ValueError):
+            return anomalies
+
+        if online and rx > 0 and tx == 0:
+            anomalies.append(
+                "RX-only interface: receiving packets but no TX — "
+                "possible link establishment failure"
+            )
+
+        if online and rx == 0 and tx == 0:
+            anomalies.append(
+                "Zero-traffic: interface UP but no packets in either direction"
+            )
+
+        return anomalies
 
     # ── Built-in Check Functions ─────────────────────────────
     def check_tcp_port(self, port: int, host: str = "localhost") -> HealthResult:

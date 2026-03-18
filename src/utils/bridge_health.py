@@ -1,11 +1,20 @@
 """
 Bridge Health Monitor — tracks gateway reliability metrics.
 
-Based on MeshForge's gateway/bridge_health.py, simplified for a
-single-radio gateway (no MeshCore, no LXMF delivery tracking).
+Based on MeshForge's gateway/bridge_health.py, adapted for a
+single-radio gateway.
 
-Monitors connection health, message flow, and error rates.  Provides
-status summaries for the TUI dashboard and diagnostics.
+Monitors connection health, message flow, error rates, and delivery
+confirmations.  Provides status summaries for the TUI dashboard and
+diagnostics.
+
+Key additions from MeshForge PRs:
+- SubsystemState: granular per-subsystem health (healthy/degraded/
+  disconnected/disabled) beyond a simple boolean.
+- DeliveryTracker: tracks message delivery confirmations with bounded
+  history and timeout detection.
+- Zero-traffic anomaly detection: flags interfaces marked UP but with
+  no messages flowing (green-but-dead pattern from MeshForge PR #1144).
 
 Usage:
     from src.utils.bridge_health import BridgeHealthMonitor, BridgeStatus
@@ -21,8 +30,9 @@ Usage:
 import logging
 import threading
 import time
+import uuid
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
@@ -40,6 +50,19 @@ class BridgeStatus(Enum):
     HEALTHY = "healthy"
     DEGRADED = "degraded"
     OFFLINE = "offline"
+
+
+class SubsystemState(Enum):
+    """Granular subsystem health (MeshForge pattern).
+
+    More expressive than a simple connected boolean — distinguishes
+    between actively healthy, degraded-but-working, disconnected,
+    and administratively disabled subsystems.
+    """
+    HEALTHY = "healthy"
+    DEGRADED = "degraded"
+    DISCONNECTED = "disconnected"
+    DISABLED = "disabled"
 
 
 # ── Error Classification ─────────────────────────────────────
@@ -343,6 +366,60 @@ class BridgeHealthMonitor:
         errors = self.get_error_rate(window_seconds=60)
         return sum(errors.values()) > 20
 
+    # ── Subsystem State (MeshForge pattern) ─────────────────
+    def get_subsystem_state(self, service: str) -> SubsystemState:
+        """Return granular subsystem health beyond connected/disconnected.
+
+        Considers connection state, error rate, and traffic flow to
+        distinguish HEALTHY, DEGRADED, DISCONNECTED, and DISABLED.
+        """
+        with self._lock:
+            connected = self._connected.get(service, False)
+
+        if not connected:
+            return SubsystemState.DISCONNECTED
+
+        # Connected but high error rate → DEGRADED
+        errors = self.get_error_rate(window_seconds=60)
+        if sum(errors.values()) >= 5:
+            return SubsystemState.DEGRADED
+
+        return SubsystemState.HEALTHY
+
+    # ── Zero-Traffic Detection (MeshForge PR #1144) ──────────
+    def check_zero_traffic(self, min_uptime: float = 120.0) -> List[str]:
+        """Detect green-but-dead interfaces: UP with no traffic.
+
+        MeshForge PR #1144 pattern: interfaces appearing healthy but
+        with zero messages flowing are often silently broken.
+
+        Args:
+            min_uptime: Minimum seconds connected before flagging.
+
+        Returns:
+            List of service names that are connected but have zero traffic.
+        """
+        now = time.time()
+        zero_traffic: List[str] = []
+        with self._lock:
+            for service, connected in self._connected.items():
+                if not connected:
+                    continue
+                connected_at = self._last_connected.get(service, now)
+                uptime = now - connected_at
+                if uptime < min_uptime:
+                    continue
+                # Check if any messages have flowed
+                total_msgs = sum(self._messages_sent.values())
+                if total_msgs == 0:
+                    zero_traffic.append(service)
+                    log.warning(
+                        "Zero-traffic detected: %s is UP (%.0fs) but no "
+                        "messages have been bridged — possible silent failure",
+                        service, uptime,
+                    )
+        return zero_traffic
+
     # ── Summary ──────────────────────────────────────────────
     def get_summary(self) -> Dict[str, Any]:
         """Comprehensive health summary for dashboards/API."""
@@ -353,6 +430,7 @@ class BridgeHealthMonitor:
                 "connections": {
                     "meshtastic": {
                         "connected": self._connected.get("meshtastic", False),
+                        "subsystem_state": self.get_subsystem_state("meshtastic").value,
                         "uptime_percent": self.get_uptime_percent("meshtastic"),
                         "reconnect_count": self._connection_count.get("meshtastic", 0),
                         "last_connected": self._last_connected.get("meshtastic"),
@@ -360,6 +438,7 @@ class BridgeHealthMonitor:
                     },
                     "rns": {
                         "connected": self._connected.get("rns", False),
+                        "subsystem_state": self.get_subsystem_state("rns").value,
                         "uptime_percent": self.get_uptime_percent("rns"),
                         "reconnect_count": self._connection_count.get("rns", 0),
                         "last_connected": self._last_connected.get("rns"),
@@ -376,4 +455,135 @@ class BridgeHealthMonitor:
                 },
                 "errors": self.get_error_rate(),
                 "bridge_status": self.get_bridge_status().value,
+                "zero_traffic_services": self.check_zero_traffic(),
             }
+
+
+# ── Delivery Tracker (MeshForge pattern) ────────────────────
+@dataclass
+class DeliveryRecord:
+    """Tracks a single message delivery attempt."""
+    delivery_id: str
+    direction: str
+    created_at: float
+    status: str = "pending"  # pending, confirmed, failed, timed_out
+    confirmed_at: Optional[float] = None
+    error: Optional[str] = None
+
+
+class DeliveryTracker:
+    """Tracks message delivery confirmations with bounded history.
+
+    MeshForge pattern: registers pending deliveries, updates on
+    callbacks, and enforces timeout thresholds.  Maintains a bounded
+    history to prevent memory overflow.
+
+    Usage::
+
+        tracker = DeliveryTracker(timeout=30.0)
+        did = tracker.register("rns_to_mesh")
+        # ... later, on confirmation callback:
+        tracker.confirm(did)
+        # ... or on failure:
+        tracker.fail(did, "radio timeout")
+        # Check stats:
+        stats = tracker.get_stats()
+    """
+
+    def __init__(self, timeout: float = 30.0, max_history: int = 500):
+        self._timeout = timeout
+        self._max_history = max_history
+        self._pending: Dict[str, DeliveryRecord] = {}
+        self._history: deque = deque(maxlen=max_history)
+        self._lock = threading.RLock()
+        self._confirmed = 0
+        self._failed = 0
+        self._timed_out = 0
+
+    def register(self, direction: str = "rns_to_mesh") -> str:
+        """Register a new pending delivery. Returns a delivery ID."""
+        delivery_id = uuid.uuid4().hex[:12]
+        now = time.time()
+        record = DeliveryRecord(
+            delivery_id=delivery_id,
+            direction=direction,
+            created_at=now,
+        )
+        with self._lock:
+            self._pending[delivery_id] = record
+        return delivery_id
+
+    def confirm(self, delivery_id: str) -> bool:
+        """Mark a delivery as confirmed. Returns True if found."""
+        now = time.time()
+        with self._lock:
+            record = self._pending.pop(delivery_id, None)
+            if record is None:
+                return False
+            record.status = "confirmed"
+            record.confirmed_at = now
+            self._history.append(record)
+            self._confirmed += 1
+        return True
+
+    def fail(self, delivery_id: str, error: str = "") -> bool:
+        """Mark a delivery as failed. Returns True if found."""
+        with self._lock:
+            record = self._pending.pop(delivery_id, None)
+            if record is None:
+                return False
+            record.status = "failed"
+            record.error = error
+            self._history.append(record)
+            self._failed += 1
+        return True
+
+    def sweep_timeouts(self) -> int:
+        """Move timed-out pending deliveries to history. Returns count."""
+        now = time.time()
+        timed_out = 0
+        with self._lock:
+            expired = [
+                did for did, rec in self._pending.items()
+                if now - rec.created_at > self._timeout
+            ]
+            for did in expired:
+                record = self._pending.pop(did)
+                record.status = "timed_out"
+                self._history.append(record)
+                self._timed_out += 1
+                timed_out += 1
+        if timed_out:
+            log.debug("Delivery tracker: %d deliveries timed out", timed_out)
+        return timed_out
+
+    def get_stats(self) -> Dict[str, Any]:
+        """Return delivery statistics snapshot."""
+        self.sweep_timeouts()
+        with self._lock:
+            return {
+                "pending": len(self._pending),
+                "confirmed": self._confirmed,
+                "failed": self._failed,
+                "timed_out": self._timed_out,
+                "total": self._confirmed + self._failed + self._timed_out,
+                "confirmation_rate": (
+                    self._confirmed / max(1, self._confirmed + self._failed + self._timed_out)
+                ) * 100,
+            }
+
+    def get_recent(self, count: int = 10) -> List[Dict[str, Any]]:
+        """Return recent delivery records."""
+        with self._lock:
+            records = list(self._history)[-count:]
+        return [
+            {
+                "id": r.delivery_id,
+                "direction": r.direction,
+                "status": r.status,
+                "created_at": r.created_at,
+                "confirmed_at": r.confirmed_at,
+                "error": r.error,
+            }
+            for r in records
+        ]

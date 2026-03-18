@@ -4,6 +4,7 @@ import os
 import signal
 import sys
 import threading
+import time
 
 # Add project root and src folder to path
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -119,7 +120,10 @@ def start_gateway(debug=False):
     if hasattr(signal, 'SIGHUP'):
         signal.signal(signal.SIGHUP, _handle_signal)
 
-    # 5. Main loop with health probe and auto-reconnect
+    # 5. Main loop with health probe, anomaly detection, and auto-reconnect
+    _last_anomaly_check = 0.0
+    _ANOMALY_CHECK_INTERVAL = 120.0  # seconds between anomaly scans
+
     try:
         while not _stop_event.is_set():
             if mesh_interface.online:
@@ -137,6 +141,22 @@ def start_gateway(debug=False):
                         bridge_health.record_connection_event(
                             "meshtastic", "error", detail="health probe unhealthy")
                         continue
+
+                # Periodic anomaly detection (MeshForge PR #1143/#1144)
+                now = time.time()
+                if now - _last_anomaly_check >= _ANOMALY_CHECK_INTERVAL:
+                    _last_anomaly_check = now
+                    # Check for zero-traffic (green-but-dead)
+                    zero_traffic = bridge_health.check_zero_traffic()
+                    if zero_traffic:
+                        for svc in zero_traffic:
+                            health_probe.record_anomaly(
+                                svc, "UP with zero traffic (green-but-dead)")
+                    # Check for RX-only or other anomalies
+                    anomalies = health_probe.check_interface_anomalies(
+                        mesh_interface.metrics)
+                    for anomaly in anomalies:
+                        health_probe.record_anomaly("meshtastic", anomaly)
 
                 # Interruptible sleep — wakes immediately on SIGTERM
                 _stop_event.wait(1)

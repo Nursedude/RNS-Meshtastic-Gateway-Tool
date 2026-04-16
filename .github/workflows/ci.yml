@@ -105,12 +105,26 @@ jobs:
               '',
               '</details>',
             ].join('\n');
-            await github.rest.issues.createComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.issue.number,
-              body,
-            });
+            // Forked PRs get a read-only GITHUB_TOKEN even when the base
+            // repo grants pull-requests: write, so createComment will 403.
+            // Skip cleanly rather than failing the workflow.
+            const pr = context.payload.pull_request;
+            const headRepo = pr && pr.head && pr.head.repo && pr.head.repo.full_name;
+            const isFork = headRepo && headRepo !== context.payload.repository.full_name;
+            if (isFork) {
+              core.info('PR is from a fork; skipping comment (token is read-only).');
+              return;
+            }
+            try {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body,
+              });
+            } catch (err) {
+              core.warning('Failed to post pytest failure comment: ' + err.message);
+            }
 
   syntax-check:
     name: Syntax Check

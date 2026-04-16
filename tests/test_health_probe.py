@@ -6,7 +6,9 @@ from src.utils.health_probe import (
     ActiveHealthProbe,
     HealthResult,
     HealthState,
+    get_health_probe,
 )
+import src.utils.health_probe as _hp_mod
 
 
 def _healthy_check():
@@ -220,3 +222,28 @@ class TestGetAllStatus:
     def test_unregistered_is_not_healthy(self):
         probe = ActiveHealthProbe(fails=1, passes=1)
         assert not probe.is_healthy("nope")
+
+
+class TestHealthProbeSingleton:
+    """Guard against the PR #28 regression where the launcher and dashboard
+    held different ActiveHealthProbe instances and the dashboard saw no state.
+    """
+
+    def setup_method(self):
+        # Reset the module-level singleton between tests
+        _hp_mod._health_probe = None
+
+    def teardown_method(self):
+        _hp_mod._health_probe = None
+
+    def test_get_health_probe_returns_same_instance(self):
+        a = get_health_probe()
+        b = get_health_probe()
+        assert a is b
+
+    def test_anomaly_recorded_on_singleton_is_visible_to_next_caller(self):
+        probe = get_health_probe()
+        probe.register_check("svc", _healthy_check)
+        probe.record_anomaly("svc", "zero traffic")
+        # A consumer (e.g. the dashboard) requesting the singleton sees it.
+        assert "svc" in get_health_probe().get_anomalies()

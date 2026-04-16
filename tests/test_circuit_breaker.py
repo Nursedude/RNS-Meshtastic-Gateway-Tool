@@ -143,6 +143,17 @@ class TestStatistics:
         stats = cb.get_stats()
         assert stats["half_open_successes"] == 1
 
+    def test_stats_timestamps_are_wall_clock(self):
+        """Exposed timestamps should be Unix epoch, not time.monotonic()."""
+        cb = CircuitBreaker(failure_threshold=1)
+        before = time.time()
+        cb.record_failure()
+        after = time.time()
+        stats = cb.get_stats()
+        # last_failure_time and last_trip_time should fall within [before, after]
+        assert before <= stats["last_failure_time"] <= after
+        assert before <= stats["last_trip_time"] <= after
+
 
 class TestCircuitProtectedDecorator:
     """Verify the @circuit_protected decorator."""

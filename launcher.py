@@ -18,7 +18,7 @@ from src.utils.common import CONFIG_PATH, load_config
 from src.utils.log import setup_logging, default_log_path, install_crash_handler
 from src.utils.reconnect import ReconnectStrategy
 from src.utils.bridge_health import BridgeHealthMonitor
-from src.utils.health_probe import ActiveHealthProbe, HealthResult
+from src.utils.health_probe import HealthResult, get_health_probe
 from src.utils.threads import shutdown_all_threads
 from src.utils.event_bus import event_bus, emit_service_status
 from src.utils.timeouts import HEALTH_CHECK_INTERVAL
@@ -97,8 +97,9 @@ def start_gateway(debug=False):
     node_tracker.start()
 
     # 3. Active health probe with hysteresis (MeshForge pattern)
-    #    3 consecutive failures before marking unhealthy (prevents false positives)
-    health_probe = ActiveHealthProbe(
+    #    3 consecutive failures before marking unhealthy (prevents false positives).
+    #    Use the module-level singleton so the dashboard reads the same state.
+    health_probe = get_health_probe(
         interval=HEALTH_CHECK_INTERVAL, fails=3, passes=2,
     )
     health_probe.register_check(

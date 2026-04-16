@@ -24,6 +24,14 @@ def _import_launcher():
         if key in ('launcher', 'Meshtastic_Interface') or 'Meshtastic_Interface' in key:
             del sys.modules[key]
 
+    # Reset the module-level health-probe singleton so each test gets a fresh
+    # probe (tests rely on per-call hysteresis counters).
+    try:
+        import src.utils.health_probe as _hp_mod
+        _hp_mod._health_probe = None
+    except ImportError:
+        pass
+
     mock_rns = MagicMock()
     mock_rns_interfaces = MagicMock()
     mock_rns_interface_mod = MagicMock()

@@ -86,18 +86,22 @@ class CircuitBreaker:
         with self._lock:
             self._failures += 1
             self._total_failures += 1
-            self._last_failure_time = time.monotonic()
+            # Wall-clock time for dashboard consumers; monotonic for
+            # interval math (see _opened_at).
+            wall_now = time.time()
+            mono_now = time.monotonic()
+            self._last_failure_time = wall_now
             if self._state is State.HALF_OPEN:
                 # Probe failed — reopen immediately
                 self._state = State.OPEN
-                self._opened_at = time.monotonic()
+                self._opened_at = mono_now
                 self._total_trips += 1
-                self._last_trip_time = time.monotonic()
+                self._last_trip_time = wall_now
             elif self._failures >= self.failure_threshold:
                 self._state = State.OPEN
-                self._opened_at = time.monotonic()
+                self._opened_at = mono_now
                 self._total_trips += 1
-                self._last_trip_time = time.monotonic()
+                self._last_trip_time = wall_now
 
     def reset(self) -> None:
         """Force-reset to CLOSED (e.g. after manual reconnect)."""

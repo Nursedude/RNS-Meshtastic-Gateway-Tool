@@ -327,6 +327,33 @@ class TestMqttDedup:
         bridge._is_duplicate("trigger_cleanup")
         assert "old_msg" not in bridge._seen_ids
 
+    def test_cleanup_keeps_fresh_entries(self, bridge):
+        """Time-based purge must not evict still-valid IDs."""
+        now = time.monotonic()
+        bridge._seen_ids["fresh_msg"] = now - 1.0
+        bridge._seen_ids["old_msg"] = now - 120
+        bridge._last_dedup_cleanup = now - 120
+        bridge._is_duplicate("trigger_cleanup")
+        assert "fresh_msg" in bridge._seen_ids
+        assert "old_msg" not in bridge._seen_ids
+
+    def test_hard_cap_trims_when_exceeded(self, bridge):
+        """If the dict balloons past MQTT_DEDUP_MAX_ENTRIES of *fresh* IDs
+        (faster than the time window can clean), trim to half the cap."""
+        from src.utils.timeouts import MQTT_DEDUP_MAX_ENTRIES
+        now = time.monotonic()
+        # Fill with fresh IDs that won't be purged by the time window.
+        bridge._seen_ids = {
+            f"id_{i}": now - 0.001 * i
+            for i in range(MQTT_DEDUP_MAX_ENTRIES + 5)
+        }
+        bridge._last_dedup_cleanup = now  # block time-based path
+        bridge._is_duplicate("trigger_cap")
+        assert len(bridge._seen_ids) <= MQTT_DEDUP_MAX_ENTRIES
+        # Newest entries (smallest i) should survive; oldest evicted.
+        assert "id_0" in bridge._seen_ids
+        assert f"id_{MQTT_DEDUP_MAX_ENTRIES + 4}" not in bridge._seen_ids
+
 
 # ── Connection Tests ──────────────────────────────────────────
 
@@ -365,6 +392,104 @@ class TestMqttHealthCheck:
     def test_unhealthy_when_disconnected(self, bridge):
         bridge._mqtt_client.is_connected.return_value = False
         assert bridge.health_check() is False
+
+
+# ── RNS PanicException resilience ────────────────────────────
+
+class TestRnsPanicResilience:
+    """Bridge construction must survive RNS's PanicException at import time.
+
+    Some RNS versions raise PanicException (a BaseException subclass) during
+    import / mode-detection. The bridge must downgrade to default mode rather
+    than letting the panic bubble up and crash the gateway.
+    """
+
+    def test_panic_exception_does_not_crash_bridge(
+        self, mock_paho, mock_owner, mqtt_config,
+    ):
+        class PanicException(BaseException):
+            pass
+
+        # Re-mock RNS so attribute access raises PanicException.
+        rns_panicking = MagicMock()
+        type(rns_panicking.Interfaces.Interface).MODE_ACCESS_POINT = property(
+            lambda self: (_ for _ in ()).throw(PanicException("rns panicked"))
+        )
+
+        mock_mqtt, mock_client = mock_paho
+        with patch.dict('sys.modules', {'RNS': rns_panicking}), \
+             patch('src.mqtt_bridge.mqtt', mock_mqtt):
+            b = MqttBridge(
+                mock_owner, "Panic Bridge",
+                config=mqtt_config,
+                bridge_health=MagicMock(),
+            )
+        assert b.mode == 1  # fell through to default
+
+    def test_keyboard_interrupt_still_propagates(
+        self, mock_paho, mock_owner, mqtt_config,
+    ):
+        rns_kb = MagicMock()
+        type(rns_kb.Interfaces.Interface).MODE_ACCESS_POINT = property(
+            lambda self: (_ for _ in ()).throw(KeyboardInterrupt())
+        )
+
+        mock_mqtt, _ = mock_paho
+        with patch.dict('sys.modules', {'RNS': rns_kb}), \
+             patch('src.mqtt_bridge.mqtt', mock_mqtt):
+            with pytest.raises(KeyboardInterrupt):
+                MqttBridge(
+                    mock_owner, "Kb Bridge",
+                    config=mqtt_config,
+                    bridge_health=MagicMock(),
+                )
+
+
+# ── SSRF / URL Validation Tests ──────────────────────────────
+
+class TestHttpApiUrlSsrf:
+    """`_validate_http_api_url` must reject cloud-metadata endpoints."""
+
+    def _validate(self, url):
+        return MqttBridge._validate_http_api_url(url, default_port=9443)
+
+    def test_localhost_allowed(self):
+        result = self._validate("http://localhost:9443/api/v1/toradio")
+        assert result == "http://localhost:9443/api/v1/toradio"
+
+    def test_aws_metadata_ip_blocked(self):
+        result = self._validate("http://169.254.169.254/latest/meta-data/")
+        assert "localhost" in result
+        assert "169.254" not in result
+
+    def test_alibaba_metadata_ip_blocked(self):
+        result = self._validate("http://100.100.100.200/")
+        assert "localhost" in result
+
+    def test_aws_metadata_ipv6_blocked(self):
+        result = self._validate("http://[fd00:ec2::254]/latest/meta-data/")
+        assert "localhost" in result
+
+    def test_link_local_v4_blocked(self):
+        result = self._validate("http://169.254.42.1:8080/")
+        assert "localhost" in result
+
+    def test_link_local_v6_blocked(self):
+        result = self._validate("http://[fe80::1]/")
+        assert "localhost" in result
+
+    def test_metadata_hostname_blocked(self):
+        result = self._validate("http://metadata.google.internal/")
+        assert "localhost" in result
+
+    def test_metadata_hostname_case_insensitive(self):
+        result = self._validate("http://Metadata.Google.Internal./")
+        assert "localhost" in result
+
+    def test_lan_ip_still_allowed(self):
+        # Operator may legitimately point at a LAN-hosted meshtasticd.
+        result = self._validate("http://192.168.1.50:9443/api/v1/toradio")
+        assert "192.168.1.50" in result
 
 
 # ── Detach Tests ──────────────────────────────────────────────

@@ -248,7 +248,15 @@ class TestDeliveryTracker:
         t = DeliveryTracker()
         did = t.register("rns_to_mesh")
         assert isinstance(did, str)
-        assert len(did) == 12
+        # Full UUID hex (128 bits) — collision-resistant for any realistic
+        # gateway lifetime.
+        assert len(did) == 32
+
+    def test_register_ids_are_unique_at_scale(self):
+        """Sanity check: 10k registrations produce 10k distinct IDs."""
+        t = DeliveryTracker(max_history=10_000)
+        ids = {t.register() for _ in range(10_000)}
+        assert len(ids) == 10_000
 
     def test_confirm(self):
         t = DeliveryTracker()

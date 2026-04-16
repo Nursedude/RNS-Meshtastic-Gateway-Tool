@@ -3,9 +3,11 @@ import os
 import platform
 import sys
 import threading
-from collections import deque
+import time
+from collections import defaultdict, deque
+from functools import wraps
 
-from flask import Flask, jsonify, render_template
+from flask import Flask, jsonify, render_template, request
 
 # Ensure project root is on path
 _BASE = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -32,6 +34,63 @@ _recent_messages = deque(maxlen=50)
 _message_lock = threading.Lock()
 _bridge_health_ref = None
 _node_tracker_ref = None
+
+
+# ── Rate limiting ─────────────────────────────────────────────
+# Per-IP fixed-window counter for /api/* endpoints. Localhost-only by
+# default, but a reverse proxy or SSH tunnel can expose these — a flood
+# would lock the GIL on Flask's threaded server.
+RATE_LIMIT_WINDOW = 60.0  # seconds
+RATE_LIMIT_MAX_REQUESTS = 60  # per IP per endpoint per window
+
+_rate_lock = threading.Lock()
+_rate_buckets: "defaultdict[tuple[str, str], deque[float]]" = defaultdict(deque)
+
+
+def _client_ip() -> str:
+    """Best-effort client IP. Falls back to 'unknown' off-request."""
+    try:
+        # request.remote_addr is the direct peer; we deliberately do NOT
+        # honour X-Forwarded-For here because the dashboard is meant to bind
+        # to localhost. Trusting that header without a known proxy chain
+        # would let any caller forge an IP and bypass the limit.
+        return request.remote_addr or "unknown"
+    except RuntimeError:
+        return "unknown"
+
+
+def rate_limited(max_requests: int = RATE_LIMIT_MAX_REQUESTS,
+                 window: float = RATE_LIMIT_WINDOW):
+    """Decorator: return HTTP 429 once an IP exceeds the per-route budget."""
+    def decorator(view):
+        @wraps(view)
+        def wrapper(*args, **kwargs):
+            key = (_client_ip(), request.endpoint or view.__name__)
+            now = time.monotonic()
+            cutoff = now - window
+            with _rate_lock:
+                bucket = _rate_buckets[key]
+                while bucket and bucket[0] < cutoff:
+                    bucket.popleft()
+                if len(bucket) >= max_requests:
+                    retry_after = max(1, int(window - (now - bucket[0])))
+                    response = jsonify({
+                        "error": "rate limit exceeded",
+                        "retry_after_seconds": retry_after,
+                    })
+                    response.status_code = 429
+                    response.headers["Retry-After"] = str(retry_after)
+                    return response
+                bucket.append(now)
+            return view(*args, **kwargs)
+        return wrapper
+    return decorator
+
+
+def _reset_rate_limits() -> None:
+    """Test hook — clear all per-IP counters."""
+    with _rate_lock:
+        _rate_buckets.clear()
 
 
 def set_bridge_health(health):
@@ -122,6 +181,7 @@ def home():
 
 
 @app.route('/api/messages')
+@rate_limited()
 def api_messages():
     """Recent message feed (last 50 messages)."""
     with _message_lock:
@@ -130,6 +190,7 @@ def api_messages():
 
 
 @app.route('/api/health')
+@rate_limited()
 def api_health():
     """Bridge health summary."""
     if _bridge_health_ref is None:
@@ -138,6 +199,7 @@ def api_health():
 
 
 @app.route('/api/nodes')
+@rate_limited()
 def api_nodes():
     """Known mesh nodes list."""
     if _node_tracker_ref is None:

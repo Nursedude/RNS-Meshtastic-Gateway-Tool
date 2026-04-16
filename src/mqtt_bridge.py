@@ -30,6 +30,7 @@ TLS is strongly recommended for non-localhost MQTT brokers.
 import base64
 import binascii
 import collections
+import ipaddress
 import json
 import logging
 import os
@@ -46,6 +47,7 @@ import paho.mqtt.client as mqtt
 
 from src.utils.circuit_breaker import CircuitBreaker
 from src.utils.timeouts import (
+    MQTT_DEDUP_MAX_ENTRIES,
     MQTT_DEDUP_WINDOW,
     MQTT_KEEPALIVE,
     MQTT_RECONNECT_MAX,
@@ -58,6 +60,29 @@ MQTT_MAX_PAYLOAD_SIZE = 4096
 
 # Regex for validating MQTT topic components (no control chars, no null bytes)
 _TOPIC_SAFE_RE = re.compile(r'^[a-zA-Z0-9/_\-\.]+$')
+
+# SSRF defence: cloud metadata service hostnames + IPs that must never be
+# reachable from the gateway HTTP client even if a misconfigured config.json
+# points there. The IP/network checks block both literal IPs and DNS-rebind
+# results that resolve to these ranges (resolution check happens at request
+# time via the kept hostname comparison).
+_BLOCKED_METADATA_HOSTS = frozenset({
+    "metadata",
+    "metadata.google.internal",
+    "metadata.googleapis.com",
+    "metadata.azure.com",
+    "instance-data",
+    "instance-data.ec2.internal",
+})
+_BLOCKED_METADATA_IPS = frozenset({
+    ipaddress.ip_address("169.254.169.254"),  # AWS / Azure / OpenStack / DO
+    ipaddress.ip_address("100.100.100.200"),  # Alibaba Cloud
+    ipaddress.ip_address("fd00:ec2::254"),    # AWS IPv6
+})
+_BLOCKED_METADATA_NETWORKS = (
+    ipaddress.ip_network("169.254.0.0/16"),   # IPv4 link-local (covers AWS)
+    ipaddress.ip_network("fe80::/10"),        # IPv6 link-local
+)
 
 log = logging.getLogger("mqtt_bridge")
 
@@ -109,6 +134,19 @@ class MqttBridge:
             self.mode = RNS.Interfaces.Interface.MODE_ACCESS_POINT
         except Exception:
             log.debug("[%s] RNS not available for mode detection, using default", name)
+            self.mode = 1
+        except BaseException as e:
+            # RNS's PanicException inherits from BaseException in some
+            # versions and is non-recoverable for RNS itself, but mode
+            # detection failing must not crash the bridge. Re-raise anything
+            # that isn't a recognised panic so SystemExit / KeyboardInterrupt
+            # still propagate.
+            if type(e).__name__ not in ("PanicException", "SystemPanicException"):
+                raise
+            log.warning(
+                "[%s] RNS PanicException during mode detection: %s — "
+                "continuing with default mode", name, e,
+            )
             self.mode = 1
 
         # --- MQTT CONFIG ---
@@ -207,6 +245,26 @@ class MqttBridge:
     # ── Validation Helpers ──────────────────────────────────────
 
     @staticmethod
+    def _is_blocked_metadata_host(hostname: str) -> bool:
+        """True if the hostname/IP targets a cloud metadata endpoint.
+
+        Catches literal IPs (incl. IPv6 in bracketed form already stripped by
+        urlparse) against the blocked IP set and link-local networks, plus
+        well-known metadata DNS names. DNS rebinding via a hostname that
+        resolves to a blocked IP is not caught here — defence-in-depth only.
+        """
+        host = hostname.strip().lower().rstrip(".")
+        if host in _BLOCKED_METADATA_HOSTS:
+            return True
+        try:
+            ip = ipaddress.ip_address(host)
+        except ValueError:
+            return False
+        if ip in _BLOCKED_METADATA_IPS:
+            return True
+        return any(ip in net for net in _BLOCKED_METADATA_NETWORKS)
+
+    @staticmethod
     def _validate_http_api_url(
         custom_url: Optional[str],
         default_port: int,
@@ -214,8 +272,11 @@ class MqttBridge:
         """Validate HTTP API URL to prevent SSRF.
 
         Only allows http:// scheme to localhost or explicit config values.
-        Rejects file://, ftp://, and other dangerous schemes.
+        Rejects file://, ftp://, and other dangerous schemes. Cloud metadata
+        endpoints (169.254.169.254, metadata.google.internal, etc.) are
+        rejected as defence-in-depth against operator misconfiguration.
         """
+        fallback = f"http://localhost:{default_port}/api/v1/toradio"
         if custom_url:
             try:
                 parsed = urlparse(custom_url)
@@ -225,12 +286,19 @@ class MqttBridge:
                         "Falling back to localhost.",
                         parsed.scheme,
                     )
-                    return f"http://localhost:{default_port}/api/v1/toradio"
+                    return fallback
                 if not parsed.hostname:
                     log.error(
                         "http_api_url has no hostname. Falling back to localhost."
                     )
-                    return f"http://localhost:{default_port}/api/v1/toradio"
+                    return fallback
+                if MqttBridge._is_blocked_metadata_host(parsed.hostname):
+                    log.error(
+                        "http_api_url host %r is a blocked cloud-metadata "
+                        "endpoint. Falling back to localhost.",
+                        parsed.hostname,
+                    )
+                    return fallback
                 # Reject URLs with embedded credentials
                 if parsed.username or parsed.password:
                     log.warning(
@@ -244,8 +312,8 @@ class MqttBridge:
                 return custom_url
             except ValueError:
                 log.error("Invalid http_api_url. Falling back to localhost.")
-                return f"http://localhost:{default_port}/api/v1/toradio"
-        return f"http://localhost:{default_port}/api/v1/toradio"
+                return fallback
+        return fallback
 
     @staticmethod
     def _build_subscribe_topic(topic_root: str, region: str) -> str:
@@ -521,12 +589,23 @@ class MqttBridge:
             if msg_id in self._seen_ids:
                 return True
             self._seen_ids[msg_id] = now
-            # Periodic cleanup
-            if now - self._last_dedup_cleanup > MQTT_DEDUP_WINDOW:
+            time_to_clean = now - self._last_dedup_cleanup > MQTT_DEDUP_WINDOW
+            over_cap = len(self._seen_ids) > MQTT_DEDUP_MAX_ENTRIES
+            if time_to_clean or over_cap:
                 cutoff = now - MQTT_DEDUP_WINDOW
                 self._seen_ids = {
                     k: v for k, v in self._seen_ids.items() if v > cutoff
                 }
+                # If still over cap (window-fresh flood), keep the newest half.
+                if len(self._seen_ids) > MQTT_DEDUP_MAX_ENTRIES:
+                    keep = sorted(
+                        self._seen_ids.items(), key=lambda kv: kv[1],
+                    )[-(MQTT_DEDUP_MAX_ENTRIES // 2):]
+                    self._seen_ids = dict(keep)
+                    log.warning(
+                        "[%s] dedup dict exceeded %d entries — trimmed to %d",
+                        self.name, MQTT_DEDUP_MAX_ENTRIES, len(self._seen_ids),
+                    )
                 self._last_dedup_cleanup = now
             return False
 

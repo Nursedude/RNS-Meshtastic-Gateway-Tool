@@ -13,8 +13,11 @@ Supports serial, TCP, and MQTT bridge modes.
 ## Key Commands
 
 ```bash
-# Install
+# Install (development — version ranges)
 pip install -r requirements.txt
+
+# Install (production — hash-verified, supply-chain safe)
+pip install --require-hashes -r requirements-lock.txt
 
 # Configure
 cp config.json.example config.json

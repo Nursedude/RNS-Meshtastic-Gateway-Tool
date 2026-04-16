@@ -152,6 +152,10 @@ HTTP_TORADIO_TIMEOUT = 10.0  # seconds
 # Message deduplication time window
 MQTT_DEDUP_WINDOW = 60.0  # seconds
 
+# Hard cap on the in-memory dedup dict — defends against an MQTT broker
+# spraying high-cardinality IDs faster than the time-based cleanup can run.
+MQTT_DEDUP_MAX_ENTRIES = 10_000
+
 # =============================================================================
 # Node Tracker
 # =============================================================================

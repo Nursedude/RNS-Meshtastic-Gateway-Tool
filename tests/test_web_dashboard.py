@@ -1,6 +1,7 @@
 """Tests for src/monitoring/web_dashboard.py — Flask dashboard routes."""
-import sys
 import os
+import sys
+import time
 from unittest.mock import patch, MagicMock
 
 import pytest
@@ -140,3 +141,50 @@ class TestDashboardContent:
         """Non-existent routes should return 404."""
         response = flask_client.get('/nonexistent')
         assert response.status_code == 404
+
+
+class TestApiRateLimiting:
+    """`/api/*` endpoints throttle bursty callers to RATE_LIMIT_MAX_REQUESTS
+    per RATE_LIMIT_WINDOW per remote IP."""
+
+    @pytest.fixture(autouse=True)
+    def _reset_buckets(self):
+        from src.monitoring import web_dashboard
+        web_dashboard._reset_rate_limits()
+        yield
+        web_dashboard._reset_rate_limits()
+
+    def test_under_limit_allowed(self, flask_client):
+        from src.monitoring import web_dashboard
+        web_dashboard._bridge_health_ref = None  # 503 path is fine
+        for _ in range(5):
+            r = flask_client.get('/api/health')
+            assert r.status_code in (200, 503)
+
+    def test_over_limit_returns_429(self, flask_client):
+        from src.monitoring import web_dashboard
+        # The decorator captured RATE_LIMIT_MAX_REQUESTS at import time, so
+        # seed the bucket with that many timestamps to simulate exhaustion.
+        ip = "127.0.0.1"
+        with web_dashboard._rate_lock:
+            bucket = web_dashboard._rate_buckets[(ip, "api_health")]
+            now = time.monotonic()
+            for _ in range(web_dashboard.RATE_LIMIT_MAX_REQUESTS):
+                bucket.append(now)
+
+        r = flask_client.get('/api/health')
+        assert r.status_code == 429
+        assert r.json["error"] == "rate limit exceeded"
+        assert "Retry-After" in r.headers
+
+    def test_per_endpoint_buckets_are_independent(self, flask_client):
+        from src.monitoring import web_dashboard
+        ip = "127.0.0.1"
+        # Saturate /api/health bucket only.
+        with web_dashboard._rate_lock:
+            now = time.monotonic()
+            for _ in range(web_dashboard.RATE_LIMIT_MAX_REQUESTS):
+                web_dashboard._rate_buckets[(ip, "api_health")].append(now)
+        # /api/messages must still be reachable.
+        r = flask_client.get('/api/messages')
+        assert r.status_code == 200

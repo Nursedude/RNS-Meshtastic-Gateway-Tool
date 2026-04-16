@@ -1,7 +1,7 @@
 # RNS-Meshtastic Gateway Tool: Persistent Issues & Session Memory
 
 > **Purpose**: Durable context for Claude Code sessions. Read this first.
-> **Last updated**: 2026-04-16 (after PRs #32, #33, #34 merged)
+> **Last updated**: 2026-04-16 (after tracker security follow-ups branch)
 
 ---
 
@@ -208,40 +208,22 @@ Delivered between 2026-04-16 in a single review-and-followup session:
 
 Items from the PR #27-#31 security review that remain open. PR #32/#34 cleared
 the biggest correctness / resilience concerns (singleton, stats clock, CI
-fork, event-bus `except`, zero-traffic per-service). What's left:
+fork, event-bus `except`, zero-traffic per-service). The
+`claude/fix-tracker-security-issues-BHt9w` branch closes the rest:
 
-### Correctness
-
-- **`DeliveryTracker.register()` uses `uuid.uuid4().hex[:12]`** — 48 bits of
-  entropy; collision risk at high throughput. Use the full UUID (32 chars) or
-  a monotonic counter.
-- **`mqtt_bridge._seen_ids` deduplication dict.** The dict is initialised and
-  `_last_dedup_cleanup` is tracked, but verify the cleanup loop actually runs
-  on the dedup path. If not, the dict grows unbounded on long-running brokers.
-
-### Security
-
-- **SSRF mitigation is partial.** `_validate_http_api_url` rejects
-  non-http/https schemes but accepts any hostname, including cloud metadata
-  endpoints (`169.254.169.254`, `metadata.google.internal`). Config is
-  local-file-controlled so impact is limited to operator misconfiguration,
-  but consider an allowlist or explicit private-range rejection for
-  defence-in-depth.
-- **`except BaseException → except Exception` in RNS mode detection.**
-  `src/mqtt_bridge.py:110` was `except BaseException` to handle RNS's
-  `PanicException` (a `BaseException` subclass in some versions). Narrowed
-  in PR #29 — verify RNS's current exception hierarchy before relying on
-  this; a BaseException at import time will now crash the bridge.
-
-### Dashboard / API
-
-- **No rate limiting on `/api/messages` and `/api/nodes`.** Flask dashboard
-  endpoints are unauthenticated and unthrottled. Localhost-only mitigates,
-  but any exposure (reverse proxy, SSH tunnel) makes a flood possible.
-- **SQLite message queue is not explicitly in WAL mode.** Concurrent
-  reader/writer behaviour depends on default journaling. Setting
-  `PRAGMA journal_mode=WAL;` on connection would match MeshForge and
-  improve robustness.
+- DeliveryTracker IDs widened to full 128-bit UUID hex.
+- MQTT `_seen_ids` cleanup verified + hard cap (`MQTT_DEDUP_MAX_ENTRIES`)
+  added; tested in `tests/test_mqtt_bridge.py::TestMqttDedup`.
+- SSRF blocklist for cloud-metadata hosts/IPs (169.254.169.254,
+  metadata.google.internal, fd00:ec2::254, 100.100.100.200, link-local
+  ranges) added to `_validate_http_api_url`.
+- RNS `PanicException` (BaseException subclass) at import time is now
+  caught by name with a `BaseException` re-raise for `KeyboardInterrupt` /
+  `SystemExit`.
+- Flask `/api/*` endpoints have a per-IP, per-route fixed-window rate
+  limit (`rate_limited` decorator).
+- SQLite `journal_mode=WAL` was already enabled at first commit; the
+  branch adds a regression test (`test_journal_mode_is_wal`).
 
 ### CI / tooling
 

@@ -80,6 +80,20 @@ class TestEnqueue:
         assert count == 1
         conn.close()
 
+    def test_journal_mode_is_wal(self, tmp_path):
+        """WAL mode is required for safe concurrent reader/writer access."""
+        db_path = str(tmp_path / "test.db")
+        mq = MessageQueue(send_fn=lambda d: None, db_path=db_path)
+        mq.enqueue(b'\x01')  # forces a connection on the worker thread
+        # New external connection — WAL is a database-wide setting persisted
+        # in the file header, so any reader sees it.
+        conn = sqlite3.connect(db_path)
+        try:
+            mode = conn.execute("PRAGMA journal_mode").fetchone()[0]
+        finally:
+            conn.close()
+        assert mode.lower() == "wal"
+
 
 # ── Deduplication tests ────────────────────────────────────────
 

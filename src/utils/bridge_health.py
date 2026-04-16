@@ -523,7 +523,9 @@ class DeliveryTracker:
 
     def register(self, direction: str = "rns_to_mesh") -> str:
         """Register a new pending delivery. Returns a delivery ID."""
-        delivery_id = uuid.uuid4().hex[:12]
+        # Full 128-bit UUID hex — truncating to 48 bits invited birthday
+        # collisions at ~16M registrations (a long-running gateway range).
+        delivery_id = uuid.uuid4().hex
         now = time.time()
         record = DeliveryRecord(
             delivery_id=delivery_id,

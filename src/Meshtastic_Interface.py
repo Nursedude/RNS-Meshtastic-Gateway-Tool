@@ -300,8 +300,12 @@ class MeshtasticInterface(Interface):
                     content=repr(data[:32]),
                     network="meshtastic",
                 )
-            except (ImportError, AttributeError):
-                pass  # Event bus is optional; never block TX path
+            except Exception as e:
+                # Event bus is optional; never block the TX path for it.
+                # Broader catch than (ImportError, AttributeError) so a
+                # transient bus hiccup (RuntimeError from a saturated
+                # ThreadPool, QueueFull, etc.) doesn't drop TX packets.
+                log.debug("event bus emit_message(tx) failed: %s", e)
         except (OSError, AttributeError, TypeError) as e:
             self.tx_errors += 1
             if self._circuit_breaker:
@@ -361,8 +365,9 @@ class MeshtasticInterface(Interface):
                         node_id=node_id,
                         network="meshtastic",
                     )
-                except (ImportError, AttributeError):
-                    pass  # Event bus is optional
+                except Exception as e:
+                    # Event bus is optional; never block the RX path for it.
+                    log.debug("event bus emit_message(rx) failed: %s", e)
 
                 # Pass data up to the RNS Core
                 self.owner.inbound(payload, self)

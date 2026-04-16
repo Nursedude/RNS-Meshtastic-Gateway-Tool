@@ -329,8 +329,13 @@ class MqttBridge:
             try:
                 from src.utils.event_bus import emit_service_status
                 emit_service_status("meshtastic", True, "MQTT connected")
-            except (ImportError, AttributeError):
-                pass  # Event bus is optional
+            except Exception as e:
+                # Event bus is optional; never block MQTT callbacks for it.
+                # Broader catch than (ImportError, AttributeError) so a
+                # transient bus hiccup (RuntimeError from a saturated
+                # ThreadPool, QueueFull, etc.) doesn't break connect handling.
+                log.debug("[%s] event bus emit_service_status(up) failed: %s",
+                          self.name, e)
         else:
             log.error("[%s] MQTT connect failed (rc=%s)", self.name, rc)
             self.online = False
@@ -348,8 +353,10 @@ class MqttBridge:
         try:
             from src.utils.event_bus import emit_service_status
             emit_service_status("meshtastic", False, "MQTT disconnected")
-        except (ImportError, AttributeError):
-            pass  # Event bus is optional
+        except Exception as e:
+            # Event bus is optional; never block MQTT callbacks for it.
+            log.debug("[%s] event bus emit_service_status(down) failed: %s",
+                      self.name, e)
 
     # ── RX Path (MQTT → RNS) ─────────────────────────────────────
 
@@ -418,8 +425,10 @@ class MqttBridge:
                     network="meshtastic",
                     raw_data=safe_metadata,
                 )
-            except (ImportError, AttributeError):
-                pass  # Event bus is optional
+            except Exception as e:
+                # Event bus is optional; never block the RX path for it.
+                log.debug("[%s] event bus emit_message(rx) failed: %s",
+                          self.name, e)
 
             if self._circuit_breaker:
                 self._circuit_breaker.record_success()
@@ -469,8 +478,10 @@ class MqttBridge:
                     content=repr(data[:32]),
                     network="meshtastic",
                 )
-            except (ImportError, AttributeError):
-                pass  # Event bus is optional
+            except Exception as e:
+                # Event bus is optional; never block the TX path for it.
+                log.debug("[%s] event bus emit_message(tx) failed: %s",
+                          self.name, e)
 
         except (urllib.error.URLError, OSError, ValueError) as e:
             self.tx_errors += 1

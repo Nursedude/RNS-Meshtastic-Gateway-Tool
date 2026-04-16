@@ -249,6 +249,64 @@ class TestMqttTxPath:
         bridge.process_incoming.assert_called_once_with(b"data")
 
 
+# ── Event-bus resilience ─────────────────────────────────────
+
+class TestEventBusResilience:
+    """Event bus failures must never break the TX/RX or connection path.
+
+    Regression guard for the PR #29 narrowing (`except (ImportError,
+    AttributeError)`) that would let a `RuntimeError` from a saturated
+    ThreadPool / QueueFull propagate and drop packets.
+    """
+
+    @patch('src.mqtt_bridge.urllib.request.urlopen')
+    @patch('src.utils.event_bus.emit_message',
+           side_effect=RuntimeError("event bus busy"))
+    def test_tx_survives_event_bus_runtime_error(
+        self, mock_emit, mock_urlopen, bridge,
+    ):
+        bridge._do_send(b"payload")
+        assert bridge.tx_packets == 1
+        assert bridge.tx_errors == 0
+        assert mock_emit.called
+        mock_urlopen.assert_called_once()
+
+    @patch('src.utils.event_bus.emit_message',
+           side_effect=RuntimeError("event bus busy"))
+    def test_rx_survives_event_bus_runtime_error(
+        self, mock_emit, bridge, mock_owner,
+    ):
+        payload = base64.b64encode(b"data")
+        msg = MagicMock()
+        msg.payload = json.dumps({
+            "id": 42,
+            "from": "!node1",
+            "payload": payload.decode(),
+        }).encode()
+        # Should not raise despite event-bus failing
+        bridge._on_message(None, None, msg)
+        assert mock_owner.inbound.call_count == 1
+        assert bridge.rx_packets == 1
+
+    @patch('src.utils.event_bus.emit_service_status',
+           side_effect=RuntimeError("event bus busy"))
+    def test_on_connect_survives_event_bus_runtime_error(
+        self, mock_emit, bridge,
+    ):
+        mock_client = MagicMock()
+        bridge._on_connect(mock_client, None, None, 0)
+        assert bridge.online is True
+
+    @patch('src.utils.event_bus.emit_service_status',
+           side_effect=RuntimeError("event bus busy"))
+    def test_on_disconnect_survives_event_bus_runtime_error(
+        self, mock_emit, bridge,
+    ):
+        # Should not raise
+        bridge._on_disconnect(MagicMock(), None, None, 0)
+        assert bridge.online is False
+
+
 # ── Dedup Tests ───────────────────────────────────────────────
 
 class TestMqttDedup:

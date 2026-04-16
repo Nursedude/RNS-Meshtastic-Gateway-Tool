@@ -396,3 +396,41 @@ class TestCircuitBreakerIntegration:
 
             iface.reconnect()
             assert iface._circuit_breaker.state is State.CLOSED
+
+
+class TestEventBusResilience:
+    """Event-bus failures must never break the TX/RX path.
+
+    Regression guard for the PR #29 narrowing (`except (ImportError,
+    AttributeError)`) that let a RuntimeError from a saturated
+    ThreadPool / QueueFull propagate and drop packets.
+    """
+
+    def test_rx_survives_event_bus_runtime_error(self, mock_owner):
+        mocks = _build_mocks()
+        mocks['meshtastic.serial_interface'].SerialInterface.side_effect = OSError("nope")
+        with patch.dict('sys.modules', mocks):
+            _clear_cached_modules()
+            from src.Meshtastic_Interface import MeshtasticInterface
+            iface = MeshtasticInterface(mock_owner, "Test", config={})
+            with patch('src.utils.event_bus.emit_message',
+                       side_effect=RuntimeError("bus busy")):
+                iface.on_receive({'decoded': {'payload': b'\x01\x02'}}, MagicMock())
+            mock_owner.inbound.assert_called_once_with(b'\x01\x02', iface)
+
+    def test_tx_survives_event_bus_runtime_error(self, mock_owner):
+        mocks = _build_mocks()
+        with patch.dict('sys.modules', mocks):
+            _clear_cached_modules()
+            from src.Meshtastic_Interface import MeshtasticInterface
+            config = {"connection_type": "tcp", "host": "localhost",
+                      "tcp_port": 4403, "features": {"tx_queue": False}}
+            iface = MeshtasticInterface(mock_owner, "Test", config=config)
+            iface.interface = MagicMock()
+            iface.online = True
+            with patch('src.utils.event_bus.emit_message',
+                       side_effect=RuntimeError("bus busy")):
+                iface._do_send(b"payload")
+            iface.interface.sendData.assert_called_once()
+            assert iface.tx_packets == 1
+            assert iface.tx_errors == 0

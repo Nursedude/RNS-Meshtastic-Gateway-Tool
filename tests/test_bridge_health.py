@@ -199,6 +199,48 @@ class TestZeroTraffic:
         s = h.get_summary()
         assert "zero_traffic_services" in s
 
+    def test_one_service_traffic_does_not_mask_another_service_silent(self):
+        """PR #32 follow-up: rns traffic should not hide a dead meshtastic.
+
+        Regression for the global-counter bug: the old code flagged
+        zero-traffic only when NO messages had flowed anywhere, so a
+        chatty rns side masked a dead meshtastic radio.
+        """
+        h = BridgeHealthMonitor()
+        h.record_connection_event("meshtastic", "connected")
+        h.record_connection_event("rns", "connected")
+        # Make both connections old enough to qualify
+        h._last_connected["meshtastic"] = time.time() - 300
+        h._last_connected["rns"] = time.time() - 300
+        # rns is bridging traffic, meshtastic is not
+        h.record_message_sent("rns_to_mesh")
+
+        result = h.check_zero_traffic(min_uptime=120)
+        assert "meshtastic" in result, "dead radio should still be flagged"
+        assert "rns" not in result, "chatty rns should not be flagged"
+
+    def test_unknown_service_is_skipped(self):
+        """Services without a direction mapping should not crash or be flagged."""
+        h = BridgeHealthMonitor()
+        h._connected["mystery"] = True
+        h._last_connected["mystery"] = time.time() - 300
+        result = h.check_zero_traffic(min_uptime=120)
+        assert "mystery" not in result
+
+    def test_warning_logs_are_emitted_after_lock_released(self, caplog):
+        """Warning about zero traffic must not be emitted inside the lock."""
+        import logging as _logging
+        h = BridgeHealthMonitor()
+        h.record_connection_event("meshtastic", "connected")
+        h._last_connected["meshtastic"] = time.time() - 300
+        with caplog.at_level(_logging.WARNING, logger="bridge_health"):
+            result = h.check_zero_traffic(min_uptime=120)
+        assert "meshtastic" in result
+        assert any(
+            "Zero-traffic detected" in rec.getMessage()
+            for rec in caplog.records
+        )
+
 
 # ── DeliveryTracker ─────────────────────────────────────────
 class TestDeliveryTracker:

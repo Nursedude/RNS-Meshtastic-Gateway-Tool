@@ -387,11 +387,25 @@ class BridgeHealthMonitor:
         return SubsystemState.HEALTHY
 
     # ── Zero-Traffic Detection (MeshForge PR #1144) ──────────
+    # Map each service to the message-flow direction it sources.  A
+    # service being "up with no inbound messages" is the signal we want;
+    # the other direction depends on a different subsystem being active.
+    _SERVICE_INBOUND_DIRECTION: Dict[str, str] = {
+        "meshtastic": "mesh_to_rns",  # meshtastic RX from radio → bridged to RNS
+        "rns": "rns_to_mesh",         # rns RX from RNS side → bridged to mesh
+    }
+
     def check_zero_traffic(self, min_uptime: float = 120.0) -> List[str]:
-        """Detect green-but-dead interfaces: UP with no traffic.
+        """Detect green-but-dead interfaces: UP with no inbound traffic.
 
         MeshForge PR #1144 pattern: interfaces appearing healthy but
-        with zero messages flowing are often silently broken.
+        with zero messages flowing through them are often silently
+        broken (radio link down, adapter wedged, etc.).
+
+        Flags each service independently based on the direction that
+        service sources — a quiet ``rns`` side does not mask a dead
+        ``meshtastic`` radio and vice versa.  Unknown services (not in
+        ``_SERVICE_INBOUND_DIRECTION``) are skipped.
 
         Args:
             min_uptime: Minimum seconds connected before flagging.
@@ -401,23 +415,30 @@ class BridgeHealthMonitor:
         """
         now = time.time()
         zero_traffic: List[str] = []
+        # Collect warning tuples to emit after releasing the lock
+        warnings: List[tuple] = []
         with self._lock:
             for service, connected in self._connected.items():
                 if not connected:
+                    continue
+                direction = self._SERVICE_INBOUND_DIRECTION.get(service)
+                if direction is None:
+                    # No mapping — can't tell if this service has traffic
                     continue
                 connected_at = self._last_connected.get(service, now)
                 uptime = now - connected_at
                 if uptime < min_uptime:
                     continue
-                # Check if any messages have flowed
-                total_msgs = sum(self._messages_sent.values())
-                if total_msgs == 0:
+                msg_count = self._messages_sent.get(direction, 0)
+                if msg_count == 0:
                     zero_traffic.append(service)
-                    log.warning(
-                        "Zero-traffic detected: %s is UP (%.0fs) but no "
-                        "messages have been bridged — possible silent failure",
-                        service, uptime,
-                    )
+                    warnings.append((service, uptime, direction))
+        for service, uptime, direction in warnings:
+            log.warning(
+                "Zero-traffic detected: %s is UP (%.0fs) but no %s "
+                "messages have been bridged — possible silent failure",
+                service, uptime, direction,
+            )
         return zero_traffic
 
     # ── Summary ──────────────────────────────────────────────

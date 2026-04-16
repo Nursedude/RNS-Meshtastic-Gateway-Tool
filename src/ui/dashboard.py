@@ -208,30 +208,51 @@ def render_dashboard():
     print()
 
     # ── Interface Health Panel (MeshForge PR #1143/#1144) ──
+    # The dashboard normally runs as a subprocess of the menu and cannot
+    # share in-memory state with the daemon.  Prefer the on-disk snapshot
+    # the daemon writes via health_probe.save_snapshot(); fall back to
+    # the in-process singleton for tests / in-process callers.
     try:
-        from src.utils.health_probe import get_health_probe
-        probe = get_health_probe()
-        all_status = probe.get_all_status()
-        anomalies = probe.get_anomalies()
-        if all_status or anomalies:
+        from src.utils.health_probe import get_health_probe, load_snapshot
+        services: dict = {}
+        anomalies: dict = {}
+        snapshot = load_snapshot()
+        if snapshot:
+            services = snapshot.get("services", {}) or {}
+            anomalies = {
+                n: s for n, s in services.items()
+                if (s.get("anomaly_count") or 0) > 0 and s.get("last_anomaly")
+            }
+        else:
+            probe = get_health_probe()
+            services = probe.get_all_status() or {}
+            anomalies = probe.get_anomalies() or {}
+
+        if services or anomalies:
             print(box_top(w))
             print(box_section("INTERFACE HEALTH", w))
-            for svc_name, status in all_status.items():
+            for svc_name, status in services.items():
                 state = status.get("state", "unknown")
                 color = C.GRN if state == "healthy" else (
                     C.YLW if state == "recovering" else C.RED)
-                uptime = status.get("uptime_percent", 0)
-                print(box_kv(svc_name, f"{color}{state.upper()}{C.RST}  uptime {uptime:.0f}%", w))
+                uptime = status.get("uptime_percent", 0) or 0
+                print(box_kv(
+                    svc_name,
+                    f"{color}{str(state).upper()}{C.RST}  uptime {uptime:.0f}%",
+                    w,
+                ))
             if anomalies:
                 print(box_mid(w))
                 print(box_row(f"{C.YLW}Anomalies:{C.RST}", w))
                 for svc_name, info in anomalies.items():
                     print(box_row(
-                        f"  {C.YLW}!{C.RST} {svc_name}: {info['last_anomaly']}", w))
+                        f"  {C.YLW}!{C.RST} {svc_name}: {info.get('last_anomaly', '?')}",
+                        w,
+                    ))
             print(box_bot(w))
             print()
     except (ImportError, AttributeError, KeyError):
-        # Health probe is optional; skip panel if unavailable or malformed
+        # Health probe / snapshot is optional; skip panel if unavailable
         pass
 
     # ── Node Tracker Panel (Session 4) ──

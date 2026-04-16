@@ -10,6 +10,9 @@ Key behaviour:
 - ``passes`` consecutive passes before marking service HEALTHY
 - Background thread runs checks at ``interval`` seconds
 
+A JSON snapshot (save_snapshot / load_snapshot) lets out-of-process
+readers such as the TUI dashboard see state recorded by the daemon.
+
 Usage:
     from src.utils.health_probe import ActiveHealthProbe, HealthResult
 
@@ -23,14 +26,16 @@ Usage:
 
     probe.stop()
 """
+import json
 import logging
+import os
 import socket
 import subprocess
 import threading
 import time
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from src.utils.timeouts import (
     HEALTH_CHECK_INTERVAL,
@@ -350,6 +355,46 @@ class ActiveHealthProbe:
                     }
         return result
 
+    def get_snapshot(self) -> Dict[str, Any]:
+        """Build a JSON-serialisable snapshot of all health state.
+
+        Used by ``save_snapshot`` to share state with out-of-process
+        readers (e.g. the TUI dashboard subprocess).
+        """
+        services: Dict[str, Any] = {}
+        with self._lock:
+            for name, state in self._states.items():
+                services[name] = {
+                    "state": state.state.value,
+                    "uptime_percent": round(state.uptime_percent, 1),
+                    "total_checks": state.total_checks,
+                    "total_passes": state.total_passes,
+                    "total_fails": state.total_fails,
+                    "last_anomaly": state.last_anomaly,
+                    "anomaly_count": state.anomaly_count,
+                }
+        return {"updated_at": time.time(), "services": services}
+
+    def save_snapshot(self, path: Optional[str] = None) -> None:
+        """Atomically persist get_snapshot() to ``path`` for out-of-process
+        readers.  Uses the tmp+rename pattern with 0o600 permissions so
+        only the owning user can read health metadata.
+        """
+        target = path or _default_snapshot_path()
+        snapshot = self.get_snapshot()
+        try:
+            dir_path = os.path.dirname(target)
+            os.makedirs(dir_path, mode=0o700, exist_ok=True)
+            tmp_path = target + ".tmp"
+            fd = os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            try:
+                os.write(fd, json.dumps(snapshot).encode())
+            finally:
+                os.close(fd)
+            os.replace(tmp_path, target)
+        except OSError as e:
+            log.warning("Failed to persist health snapshot to %s: %s", target, e)
+
     def check_interface_anomalies(self, metrics: Dict) -> List[str]:
         """Detect interface anomalies from metrics (MeshForge PR #1143).
 
@@ -448,3 +493,49 @@ def get_health_probe(
             interval=interval, fails=fails, passes=passes,
         )
         return _health_probe
+
+
+# ── Cross-process snapshot ───────────────────────────────────
+def _default_snapshot_path() -> str:
+    """Return default snapshot path: ~/.config/rns-gateway/health.json."""
+    from src.utils.common import get_real_user_home
+    config_dir = os.path.join(get_real_user_home(), ".config", "rns-gateway")
+    os.makedirs(config_dir, mode=0o700, exist_ok=True)
+    try:
+        os.chmod(config_dir, 0o700)
+    except OSError:
+        pass
+    return os.path.join(config_dir, "health.json")
+
+
+def load_snapshot(
+    path: Optional[str] = None,
+    max_age: float = 60.0,
+) -> Optional[Dict[str, Any]]:
+    """Read a health snapshot written by ``ActiveHealthProbe.save_snapshot``.
+
+    Returns None if the file is missing, malformed, or older than
+    ``max_age`` seconds (stale).  The stale check protects the TUI
+    dashboard from displaying state from a crashed or stopped daemon.
+    """
+    target = path or _default_snapshot_path()
+    try:
+        with open(target, "r") as f:
+            data = json.load(f)
+    except FileNotFoundError:
+        return None
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError) as e:
+        log.debug("Failed to load health snapshot from %s: %s", target, e)
+        return None
+
+    if not isinstance(data, dict):
+        return None
+    updated_at = data.get("updated_at")
+    if not isinstance(updated_at, (int, float)):
+        return None
+    if max_age > 0 and (time.time() - updated_at) > max_age:
+        return None
+    services = data.get("services")
+    if not isinstance(services, dict):
+        return None
+    return data

@@ -1,4 +1,5 @@
 """Tests for src.utils.health_probe – ActiveHealthProbe hysteresis and lifecycle."""
+import os
 import threading
 import time
 import pytest
@@ -247,3 +248,82 @@ class TestHealthProbeSingleton:
         probe.record_anomaly("svc", "zero traffic")
         # A consumer (e.g. the dashboard) requesting the singleton sees it.
         assert "svc" in get_health_probe().get_anomalies()
+
+
+# ── Snapshot persistence ────────────────────────────────────
+class TestSnapshotPersistence:
+    """save_snapshot / load_snapshot bridge daemon ↔ TUI-subprocess state."""
+
+    def test_round_trip(self, tmp_path):
+        path = str(tmp_path / "health.json")
+        probe = ActiveHealthProbe(fails=1, passes=1)
+        probe.register_check("meshtastic", _healthy_check)
+        probe.check_now("meshtastic")
+        probe.record_anomaly("meshtastic", "zero traffic")
+
+        probe.save_snapshot(path)
+
+        from src.utils.health_probe import load_snapshot
+        data = load_snapshot(path, max_age=60.0)
+        assert data is not None
+        assert "updated_at" in data
+        svc = data["services"]["meshtastic"]
+        assert svc["state"] == "healthy"
+        assert svc["last_anomaly"] == "zero traffic"
+        assert svc["anomaly_count"] == 1
+
+    def test_load_missing_file_returns_none(self, tmp_path):
+        from src.utils.health_probe import load_snapshot
+        assert load_snapshot(str(tmp_path / "nope.json")) is None
+
+    def test_load_malformed_json_returns_none(self, tmp_path):
+        path = tmp_path / "health.json"
+        path.write_text("{ not json")
+        from src.utils.health_probe import load_snapshot
+        assert load_snapshot(str(path)) is None
+
+    def test_load_missing_updated_at_returns_none(self, tmp_path):
+        path = tmp_path / "health.json"
+        path.write_text('{"services": {}}')
+        from src.utils.health_probe import load_snapshot
+        assert load_snapshot(str(path)) is None
+
+    def test_load_stale_snapshot_returns_none(self, tmp_path):
+        import json as _json
+        path = tmp_path / "health.json"
+        path.write_text(_json.dumps({
+            "updated_at": time.time() - 3600,
+            "services": {},
+        }))
+        from src.utils.health_probe import load_snapshot
+        assert load_snapshot(str(path), max_age=60.0) is None
+
+    def test_load_max_age_zero_disables_ttl(self, tmp_path):
+        import json as _json
+        path = tmp_path / "health.json"
+        path.write_text(_json.dumps({
+            "updated_at": 0.0,
+            "services": {"x": {"state": "healthy"}},
+        }))
+        from src.utils.health_probe import load_snapshot
+        data = load_snapshot(str(path), max_age=0)
+        assert data is not None
+        assert data["services"]["x"]["state"] == "healthy"
+
+    def test_snapshot_file_is_0o600(self, tmp_path):
+        import stat
+        path = str(tmp_path / "health.json")
+        probe = ActiveHealthProbe(fails=1, passes=1)
+        probe.register_check("svc", _healthy_check)
+        probe.save_snapshot(path)
+        mode = stat.S_IMODE(os.stat(path).st_mode)
+        assert mode == 0o600
+
+    def test_save_is_atomic_no_tmp_left_behind(self, tmp_path):
+        path = str(tmp_path / "health.json")
+        probe = ActiveHealthProbe(fails=1, passes=1)
+        probe.register_check("svc", _healthy_check)
+        probe.save_snapshot(path)
+        # Should not leave *.tmp behind
+        tmp_files = list(tmp_path.glob("*.tmp"))
+        assert tmp_files == []

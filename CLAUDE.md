@@ -77,6 +77,13 @@ Key settings in `config.json`:
   log.debug(...)` — broad enough to catch `RuntimeError` from a saturated bus,
   but never silent (`pass`) and never narrow enough to let transient hiccups
   drop TX/RX packets.
+- Any new HTTP fetcher must reject cloud-metadata endpoints — route through
+  `MqttBridge._is_blocked_metadata_host` or apply the same blocklist
+  (169.254.169.254, fd00:ec2::254, metadata.google.internal, link-local
+  ranges).
+- New Flask `/api/*` routes wear `@rate_limited()` from
+  `src/monitoring/web_dashboard.py`.
+- Tracker / dedup IDs use full `uuid.uuid4().hex` (32 chars) — never truncate.
 
 ## Relationship to MeshForge
 

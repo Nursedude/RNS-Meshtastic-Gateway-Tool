@@ -230,7 +230,8 @@ def render_dashboard():
                         f"  {C.YLW}!{C.RST} {svc_name}: {info['last_anomaly']}", w))
             print(box_bot(w))
             print()
-    except Exception:  # noqa: S110
+    except (ImportError, AttributeError, KeyError):
+        # Health probe is optional; skip panel if unavailable or malformed
         pass
 
     # ── Node Tracker Panel (Session 4) ──

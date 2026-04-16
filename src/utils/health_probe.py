@@ -368,7 +368,8 @@ class ActiveHealthProbe:
             online = bool(metrics.get("online", False))
             tx = int(metrics.get("tx_packets", 0))
             rx = int(metrics.get("rx_packets", 0))
-        except (TypeError, ValueError):
+        except (TypeError, ValueError) as e:
+            log.debug("check_interface_anomalies: malformed metrics: %s", e)
             return anomalies
 
         if online and rx > 0 and tx == 0:

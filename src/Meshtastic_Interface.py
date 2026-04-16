@@ -300,7 +300,7 @@ class MeshtasticInterface(Interface):
                     content=repr(data[:32]),
                     network="meshtastic",
                 )
-            except Exception:  # noqa: S110
+            except (ImportError, AttributeError):
                 pass  # Event bus is optional; never block TX path
         except (OSError, AttributeError, TypeError) as e:
             self.tx_errors += 1
@@ -361,7 +361,7 @@ class MeshtasticInterface(Interface):
                         node_id=node_id,
                         network="meshtastic",
                     )
-                except Exception:  # noqa: S110
+                except (ImportError, AttributeError):
                     pass  # Event bus is optional
 
                 # Pass data up to the RNS Core

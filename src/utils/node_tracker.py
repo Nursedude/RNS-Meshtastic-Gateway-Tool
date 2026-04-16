@@ -45,7 +45,11 @@ def _default_nodes_path() -> str:
     """Return default persistence path: ~/.config/rns-gateway/nodes.json."""
     from src.utils.common import get_real_user_home
     config_dir = os.path.join(get_real_user_home(), ".config", "rns-gateway")
-    os.makedirs(config_dir, exist_ok=True)
+    os.makedirs(config_dir, mode=0o700, exist_ok=True)
+    try:
+        os.chmod(config_dir, 0o700)
+    except OSError:
+        pass
     return os.path.join(config_dir, "nodes.json")
 
 
@@ -98,16 +102,23 @@ class NodeTracker:
             log.warning("Failed to load nodes from %s: %s", self._path, e)
 
     def save(self) -> None:
-        """Write current node registry to JSON file."""
+        """Write current node registry to JSON file with restrictive permissions."""
         with self._lock:
             data = {
                 node_id: asdict(info)
                 for node_id, info in self._nodes.items()
             }
         try:
-            os.makedirs(os.path.dirname(self._path), exist_ok=True)
-            with open(self._path, 'w') as f:
-                json.dump(data, f, indent=2)
+            dir_path = os.path.dirname(self._path)
+            os.makedirs(dir_path, mode=0o700, exist_ok=True)
+            # Write to temp file then rename for atomic persistence
+            tmp_path = self._path + ".tmp"
+            fd = os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            try:
+                os.write(fd, json.dumps(data, indent=2).encode())
+            finally:
+                os.close(fd)
+            os.replace(tmp_path, self._path)
             self._last_save = time.time()
         except OSError as e:
             log.warning("Failed to persist nodes to %s: %s", self._path, e)

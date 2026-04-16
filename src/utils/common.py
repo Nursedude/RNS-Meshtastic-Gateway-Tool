@@ -69,13 +69,16 @@ def validate_hostname(host):
     """Validate a hostname/IP string (MeshForge pattern).
 
     Rejects flag-injection attempts (leading '-'), overly long values,
-    and characters outside the safe set.
+    null bytes, newlines, and characters outside the safe set.
 
     Returns:
         (ok: bool, error_message: str)
     """
     if not host or not isinstance(host, str):
         return False, "hostname must be a non-empty string"
+    # Reject null bytes and newlines (injection prevention)
+    if '\x00' in host or '\n' in host or '\r' in host:
+        return False, "hostname contains null bytes or newlines"
     if host.startswith('-'):
         return False, "hostname must not start with '-' (flag injection)"
     if len(host) > 253:
@@ -464,6 +467,9 @@ def config_template_mqtt(
             "mqtt_topic_root": "msh",
             "mqtt_region": region,
             "http_api_port": http_api_port,
+            "mqtt_username": None,
+            "mqtt_password": None,
+            "mqtt_tls": False,
             "bitrate": 500,
             "rns_configdir": None,
             "structured_logging": False,

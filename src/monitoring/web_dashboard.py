@@ -70,7 +70,8 @@ def add_security_headers(response):
     """Add security headers to every response (OWASP recommendations)."""
     response.headers['Content-Security-Policy'] = (
         "default-src 'self'; style-src 'self' 'unsafe-inline'; "
-        "script-src 'self' 'unsafe-inline'"
+        "script-src 'self' 'unsafe-inline'; "
+        "frame-ancestors 'none'"
     )
     response.headers['X-Content-Type-Options'] = 'nosniff'
     response.headers['X-Frame-Options'] = 'DENY'
@@ -165,4 +166,4 @@ if __name__ == '__main__':
         log.warning("Dashboard binding to all interfaces (0.0.0.0). "
                      "No authentication is enabled. Restrict to 127.0.0.1 in production.")
     log.info("Starting Web Dashboard on %s:%s...", host, port)
-    app.run(host=host, port=port)
+    app.run(host=host, port=port, debug=False)

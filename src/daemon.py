@@ -57,12 +57,19 @@ def _default_pid_path() -> str:
     """Return the default PID file path: ~/.config/rns-gateway/gateway.pid"""
     from src.utils.common import get_real_user_home
     pid_dir = os.path.join(get_real_user_home(), ".config", "rns-gateway")
-    os.makedirs(pid_dir, exist_ok=True)
+    os.makedirs(pid_dir, mode=0o700, exist_ok=True)
+    try:
+        os.chmod(pid_dir, 0o700)
+    except OSError:
+        pass
     return os.path.join(pid_dir, "gateway.pid")
 
 
 class PidFile:
-    """PID file management — prevents multiple instances.
+    """PID file management with proper file locking.
+
+    Uses fcntl.flock() on POSIX systems to prevent race conditions
+    between concurrent daemon starts (TOCTOU prevention).
 
     Args:
         path: Path to PID file.  Defaults to ~/.config/rns-gateway/gateway.pid.
@@ -70,12 +77,17 @@ class PidFile:
 
     def __init__(self, path: Optional[str] = None):
         self.path = path or _default_pid_path()
+        self._lock_fd = None
 
     def write(self) -> None:
-        """Write current PID to file."""
+        """Write current PID to file with restrictive permissions."""
         os.makedirs(os.path.dirname(self.path), exist_ok=True)
-        with open(self.path, 'w') as f:
-            f.write(str(os.getpid()))
+        # Use os.open with explicit mode to avoid default umask
+        fd = os.open(self.path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        try:
+            os.write(fd, str(os.getpid()).encode())
+        finally:
+            os.close(fd)
 
     def read(self) -> Optional[int]:
         """Read PID from file.  Returns None if not found or invalid."""
@@ -104,15 +116,51 @@ class PidFile:
             pass
 
     def acquire(self) -> bool:
-        """Acquire PID file lock.  Returns False if another instance is running."""
+        """Acquire PID file lock atomically.
+
+        Uses fcntl.flock() on POSIX to prevent race conditions where
+        two processes could both see a stale PID and overwrite each other.
+        Falls back to the check-then-write pattern on non-POSIX systems.
+
+        Returns False if another instance is running.
+        """
+        # Always check if an existing PID is running first
         if self.is_running():
             return False
-        # Stale PID file — clean up and proceed
-        self.write()
-        return True
+
+        try:
+            import fcntl
+            os.makedirs(os.path.dirname(self.path), exist_ok=True)
+            fd = os.open(self.path, os.O_WRONLY | os.O_CREAT, 0o600)
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except (OSError, BlockingIOError):
+                os.close(fd)
+                return False
+            # Lock acquired — write PID
+            os.ftruncate(fd, 0)
+            os.lseek(fd, 0, os.SEEK_SET)
+            os.write(fd, str(os.getpid()).encode())
+            self._lock_fd = fd
+            return True
+        except ImportError:
+            # Non-POSIX fallback (Windows)
+            self.write()
+            return True
 
     def release(self) -> None:
-        """Release PID file lock (remove file if PID matches)."""
+        """Release PID file lock (unlock and remove file if PID matches)."""
+        if self._lock_fd is not None:
+            try:
+                import fcntl
+                fcntl.flock(self._lock_fd, fcntl.LOCK_UN)
+            except (ImportError, OSError):
+                pass
+            try:
+                os.close(self._lock_fd)
+            except OSError:
+                pass
+            self._lock_fd = None
         pid = self.read()
         if pid == os.getpid():
             self.remove()

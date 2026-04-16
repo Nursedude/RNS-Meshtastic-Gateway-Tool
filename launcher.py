@@ -158,6 +158,9 @@ def start_gateway(debug=False):
                         mesh_interface.metrics)
                     for anomaly in anomalies:
                         health_probe.record_anomaly("meshtastic", anomaly)
+                    # Persist snapshot so out-of-process readers (TUI
+                    # dashboard subprocess) can display health state.
+                    health_probe.save_snapshot()
 
                 # Interruptible sleep — wakes immediately on SIGTERM
                 _stop_event.wait(1)

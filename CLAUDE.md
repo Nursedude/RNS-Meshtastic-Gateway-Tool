@@ -2,7 +2,7 @@
 
 > **Author**: WH6GXZ (Nursedude)
 > **Status**: Alpha — functional, under active testing
-> **Version**: 1.5
+> **Version**: 1.6
 
 ## Quick Context
 
@@ -68,6 +68,15 @@ Key settings in `config.json`:
 - Security: no `shell=True`, no bare `except:`, validate inputs, subprocess timeouts
 - Use `config.json` for all runtime settings — no hardcoded values
 - Test against both serial and TCP Meshtastic connections
+- The TUI dashboard (`src/ui/dashboard.py`) runs as a **subprocess** of the menu.
+  Any state it needs from the daemon must be on-disk (atomic tmp+rename, 0o600).
+  See `node_tracker.py` and `health_probe.save_snapshot()` for the pattern.
+- Stats/metrics timestamps exposed via API or dashboard must be wall-clock
+  (`time.time()`), not `time.monotonic()`. Reserve monotonic for interval math.
+- Data-path exception handling for event-bus calls: `except Exception as e:
+  log.debug(...)` — broad enough to catch `RuntimeError` from a saturated bus,
+  but never silent (`pass`) and never narrow enough to let transient hiccups
+  drop TX/RX packets.
 
 ## Relationship to MeshForge
 

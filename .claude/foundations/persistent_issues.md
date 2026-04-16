@@ -1,7 +1,7 @@
 # RNS-Meshtastic Gateway Tool: Persistent Issues & Session Memory
 
 > **Purpose**: Durable context for Claude Code sessions. Read this first.
-> **Last updated**: 2026-04-16
+> **Last updated**: 2026-04-16 (after PRs #32, #33, #34 merged)
 
 ---
 
@@ -67,6 +67,45 @@ Never require credentials in `config.json`. Support `GATEWAY_MQTT_USERNAME` and
 ### 7. No innerHTML in dashboard
 Dashboard JS uses DOM API (`createElement`/`textContent`) — never `innerHTML`.
 
+### 8. TUI dashboard is a separate process
+`src/ui/dashboard.py` is launched as a subprocess by `src/ui/menu.py`. It CANNOT
+share in-memory state (singletons, module globals) with the daemon. Any state
+the dashboard needs must round-trip through disk. Established pattern: atomic
+tmp+rename with 0o600 — see `node_tracker.save()` and `health_probe.save_snapshot()`
+/ `load_snapshot()`. Readers should enforce a TTL so a dead daemon can't leave
+phantom state displayed.
+
+### 9. Stats APIs use wall-clock, not monotonic
+Any timestamp exposed via `get_stats()`, dashboards, or an HTTP API must be
+`time.time()` (Unix epoch). Reserve `time.monotonic()` for interval math
+internal to the class (e.g., recovery-timeout computations). Mixing the two
+within the same API has bitten us (circuit_breaker get_stats regression).
+
+### 10. Forked-PR GitHub tokens are read-only
+A base repo cannot grant `pull-requests: write` to a forked-PR workflow run —
+the token is always read-only. Any CI step that posts comments / status on PRs
+must detect `pr.head.repo.full_name !== repository.full_name` and skip, and
+wrap the API call in try/catch with `core.warning`. Otherwise the workflow
+fails for every external contributor PR.
+
+### 11. Event-bus calls: broad-except + log.debug
+Event-bus emits (`src/utils/event_bus.emit_*`) are optional — they must never
+block TX/RX or connection handlers. The right pattern is:
+
+```python
+try:
+    from src.utils.event_bus import emit_message
+    emit_message(...)
+except Exception as e:
+    log.debug("event bus emit failed: %s", e)
+```
+
+Narrower tuples like `(ImportError, AttributeError)` are too tight — a
+saturated `ThreadPoolExecutor` or `QueueFull` raises `RuntimeError`, which
+would propagate and drop a packet. `except Exception` still lets
+`SystemExit`/`KeyboardInterrupt` through (they're `BaseException` subclasses),
+and the explicit `log.debug` avoids the silent-swallow anti-pattern.
+
 ---
 
 ## Known Gotchas
@@ -116,10 +155,18 @@ Dashboard binds to `127.0.0.1` by default — warn loudly if overridden to `0.0.
 
 ## Test Suite
 
-- **495 tests** across 23 test files
+- **506 tests** across 23 test files (as of 2026-04-16, after PR #34)
 - Run: `python -m pytest tests/ -v --timeout=30`
 - All tests must pass before committing
 - Flask dashboard tests require `flask` to be installed (skip gracefully if missing)
+
+### Singleton test hygiene
+
+When a module uses a singleton (e.g. `_health_probe` in `src/utils/health_probe.py`),
+tests that instantiate it leak state across the session unless explicitly reset.
+Use `setup_method` / `teardown_method` setting `_hp_mod._health_probe = None`.
+`tests/test_launcher.py::_import_launcher` does this too so hysteresis counters
+stay deterministic when the launcher is imported repeatedly.
 
 ---
 
@@ -140,15 +187,84 @@ These patterns were ported from MeshForge and should be maintained:
 
 ---
 
+## Recent Review Cycle (PRs #27-#34)
+
+Delivered between 2026-04-16 in a single review-and-followup session:
+
+| PR | Summary | Merge sha |
+|----|---------|-----------|
+| #27 | README Mermaid diagrams | db74793 |
+| #28 | MeshForge diagnostics, delivery tracking, resilience | 38f01e9 |
+| #29 | Security hardening (MQTT TLS/auth, XSS, SSRF, file perms, S-22..S-34) | e391478 |
+| #30 | Supply-chain lockfile + `.claude/` session memory | 33599cf |
+| #31 | CI pytest-log tee + failure summary comment | 256e942 |
+| #32 | Review follow-ups: singleton wiring, stats clock, CI fork guard | 7cbabc0 |
+| #33 | Snapshot persistence for dashboard ↔ daemon state | b8ba288 |
+| #34 | Event-bus resilience + per-service zero-traffic detection | bf7dda7 |
+
+---
+
+## Outstanding Review Findings (not yet fixed)
+
+Items from the PR #27-#31 security review that remain open. PR #32/#34 cleared
+the biggest correctness / resilience concerns (singleton, stats clock, CI
+fork, event-bus `except`, zero-traffic per-service). What's left:
+
+### Correctness
+
+- **`DeliveryTracker.register()` uses `uuid.uuid4().hex[:12]`** — 48 bits of
+  entropy; collision risk at high throughput. Use the full UUID (32 chars) or
+  a monotonic counter.
+- **`mqtt_bridge._seen_ids` deduplication dict.** The dict is initialised and
+  `_last_dedup_cleanup` is tracked, but verify the cleanup loop actually runs
+  on the dedup path. If not, the dict grows unbounded on long-running brokers.
+
+### Security
+
+- **SSRF mitigation is partial.** `_validate_http_api_url` rejects
+  non-http/https schemes but accepts any hostname, including cloud metadata
+  endpoints (`169.254.169.254`, `metadata.google.internal`). Config is
+  local-file-controlled so impact is limited to operator misconfiguration,
+  but consider an allowlist or explicit private-range rejection for
+  defence-in-depth.
+- **`except BaseException → except Exception` in RNS mode detection.**
+  `src/mqtt_bridge.py:110` was `except BaseException` to handle RNS's
+  `PanicException` (a `BaseException` subclass in some versions). Narrowed
+  in PR #29 — verify RNS's current exception hierarchy before relying on
+  this; a BaseException at import time will now crash the bridge.
+
+### Dashboard / API
+
+- **No rate limiting on `/api/messages` and `/api/nodes`.** Flask dashboard
+  endpoints are unauthenticated and unthrottled. Localhost-only mitigates,
+  but any exposure (reverse proxy, SSH tunnel) makes a flood possible.
+- **SQLite message queue is not explicitly in WAL mode.** Concurrent
+  reader/writer behaviour depends on default journaling. Setting
+  `PRAGMA journal_mode=WAL;` on connection would match MeshForge and
+  improve robustness.
+
+### CI / tooling
+
+- **Pre-existing unused imports.** `threading`, `pytest` in
+  `tests/test_health_probe.py`; `signal` in `tests/test_launcher.py`.
+  Safe to remove but outside the current review scope.
+
+---
+
 ## Development Checklist
 
 Before committing, verify:
 
 - [ ] `python -m pytest tests/ -v --timeout=30` — all pass
+- [ ] `ruff check src/ launcher.py scripts/` clean
 - [ ] No `shell=True` in subprocess calls
-- [ ] No bare `except Exception: pass`
+- [ ] No bare `except Exception: pass` (narrow or `log.debug` instead)
 - [ ] Timeouts from `src/utils/timeouts.py`, not hardcoded
 - [ ] Config values validated before use
-- [ ] Sensitive files written with restrictive permissions
+- [ ] Sensitive files written with restrictive permissions (`0o600`)
 - [ ] No `innerHTML` in dashboard JavaScript
 - [ ] MQTT credentials support env vars, not just config
+- [ ] Dashboard ↔ daemon state goes through disk (atomic tmp+rename), not singletons
+- [ ] Stats/API timestamps are wall-clock (`time.time()`), not `time.monotonic()`
+- [ ] Event-bus emits use `except Exception as e: log.debug(...)` (never a narrow tuple)
+- [ ] CI steps that post PR comments check for fork PRs + wrap in try/catch

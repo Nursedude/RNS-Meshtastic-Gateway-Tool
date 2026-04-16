@@ -1,7 +1,7 @@
 # Supervisor NOC: RNS-Meshtastic Gateway
 
 **Status:** Alpha — functional but under active testing
-**Version:** 1.5
+**Version:** 1.6
 **License:** GPL-3.0
 **Python:** 3.9+
 
@@ -316,7 +316,7 @@ This project is in **alpha**. Core gateway functionality (TX/RX, reconnect, heal
 - Circuit breaker and reconnect logic (unit tests)
 - TUI menu and dashboard rendering
 - MQTT bridge message flow (unit tests)
-- 436 unit tests passing
+- 506+ unit tests passing
 
 **What needs more testing:**
 

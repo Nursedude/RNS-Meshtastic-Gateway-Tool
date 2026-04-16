@@ -115,36 +115,63 @@
     <p class="dim">Auto-refreshes every 30s</p>
 
     <script>
+    /* Helper: create a <td> with safe text content (XSS prevention) */
+    function td(text, style) {
+        var cell = document.createElement('td');
+        cell.textContent = text;
+        if (style) cell.setAttribute('style', style);
+        return cell;
+    }
     function fetchMessages() {
-        fetch('/api/messages').then(r => r.json()).then(msgs => {
-            const el = document.getElementById('msg-feed');
-            if (!msgs.length) { el.innerHTML = '<p class="dim">No messages yet</p>'; return; }
-            const rows = msgs.slice(-10).reverse().map(m => {
-                const arrow = m.direction === 'rx' ? '&larr;' : '&rarr;';
-                const node = m.node_id || '?';
-                return '<tr><td>' + m.timestamp.split('T')[1].split('.')[0] + '</td>' +
-                       '<td>' + arrow + '</td><td>' + node + '</td>' +
-                       '<td>' + (m.content || '').substring(0, 40) + '</td></tr>';
+        fetch('/api/messages').then(function(r) { return r.json(); }).then(function(msgs) {
+            var el = document.getElementById('msg-feed');
+            el.textContent = '';
+            if (!msgs.length) {
+                var p = document.createElement('p');
+                p.className = 'dim';
+                p.textContent = 'No messages yet';
+                el.appendChild(p);
+                return;
+            }
+            var tbl = document.createElement('table');
+            msgs.slice(-10).reverse().forEach(function(m) {
+                var tr = document.createElement('tr');
+                var ts = (m.timestamp || '').split('T')[1];
+                tr.appendChild(td(ts ? ts.split('.')[0] : ''));
+                tr.appendChild(td(m.direction === 'rx' ? '\u2190' : '\u2192'));
+                tr.appendChild(td(m.node_id || '?'));
+                tr.appendChild(td((m.content || '').substring(0, 40)));
+                tbl.appendChild(tr);
             });
-            el.innerHTML = '<table>' + rows.join('') + '</table>';
-        }).catch(() => {});
+            el.appendChild(tbl);
+        }).catch(function() {});
     }
     function fetchNodes() {
-        fetch('/api/nodes').then(r => r.json()).then(nodes => {
-            const el = document.getElementById('node-list');
-            if (!nodes.length) { el.innerHTML = '<p class="dim">No nodes tracked yet</p>'; return; }
-            const rows = nodes.slice(0, 10).map(n => {
-                const seen = new Date(n.last_seen * 1000).toLocaleTimeString();
-                const name = n.node_name || n.node_id;
-                const snr = n.snr != null ? n.snr.toFixed(1) + ' dB' : '-';
-                return '<tr><td>' + name + '</td><td>' + seen + '</td>' +
-                       '<td>' + snr + '</td></tr>';
+        fetch('/api/nodes').then(function(r) { return r.json(); }).then(function(nodes) {
+            var el = document.getElementById('node-list');
+            el.textContent = '';
+            if (!nodes.length) {
+                var p = document.createElement('p');
+                p.className = 'dim';
+                p.textContent = 'No nodes tracked yet';
+                el.appendChild(p);
+                return;
+            }
+            var tbl = document.createElement('table');
+            var hdr = document.createElement('tr');
+            hdr.appendChild(td('Node', 'color:#00ccff'));
+            hdr.appendChild(td('Last Seen', 'color:#00ccff'));
+            hdr.appendChild(td('SNR', 'color:#00ccff'));
+            tbl.appendChild(hdr);
+            nodes.slice(0, 10).forEach(function(n) {
+                var tr = document.createElement('tr');
+                tr.appendChild(td(n.node_name || n.node_id));
+                tr.appendChild(td(new Date(n.last_seen * 1000).toLocaleTimeString()));
+                tr.appendChild(td(n.snr != null ? n.snr.toFixed(1) + ' dB' : '-'));
+                tbl.appendChild(tr);
             });
-            el.innerHTML = '<table><tr><td style="color:#00ccff">Node</td>' +
-                           '<td style="color:#00ccff">Last Seen</td>' +
-                           '<td style="color:#00ccff">SNR</td></tr>' +
-                           rows.join('') + '</table>';
-        }).catch(() => {});
+            el.appendChild(tbl);
+        }).catch(function() {});
     }
     fetchMessages(); fetchNodes();
     setInterval(fetchMessages, 10000);

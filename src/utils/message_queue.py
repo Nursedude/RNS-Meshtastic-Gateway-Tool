@@ -80,7 +80,12 @@ def _default_db_path() -> str:
     """Return the default SQLite DB path: ~/.config/rns-gateway/message_queue.db"""
     from src.utils.common import get_real_user_home
     config_dir = os.path.join(get_real_user_home(), ".config", "rns-gateway")
-    os.makedirs(config_dir, exist_ok=True)
+    os.makedirs(config_dir, mode=0o700, exist_ok=True)
+    # Ensure directory permissions are correct even if it already existed
+    try:
+        os.chmod(config_dir, 0o700)
+    except OSError:
+        pass
     return os.path.join(config_dir, "message_queue.db")
 
 

@@ -11,6 +11,9 @@
         "mqtt_topic_root": "msh",
         "mqtt_region": "US",
         "http_api_port": 9443,
+        "mqtt_username": null,
+        "mqtt_password": null,
+        "mqtt_tls": false,
         "bitrate": 500,
         "rns_configdir": null,
         "structured_logging": false

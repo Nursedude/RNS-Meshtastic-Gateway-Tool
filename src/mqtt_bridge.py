@@ -15,19 +15,32 @@ Usage (in config.json):
         "mqtt_port": 1883,
         "mqtt_topic_root": "msh",
         "mqtt_region": "US",
-        "http_api_port": 9443
+        "http_api_port": 9443,
+        "mqtt_username": null,
+        "mqtt_password": null,
+        "mqtt_tls": false
     }
+
+MQTT credentials can also be set via environment variables:
+    GATEWAY_MQTT_USERNAME, GATEWAY_MQTT_PASSWORD
+
+TLS is strongly recommended for non-localhost MQTT brokers.
 """
 
 import base64
+import binascii
 import collections
 import json
 import logging
+import os
+import re
+import ssl
 import threading
 import time
 import urllib.request
 import urllib.error
 from typing import Any, Dict, Optional
+from urllib.parse import urlparse
 
 import paho.mqtt.client as mqtt
 
@@ -39,6 +52,12 @@ from src.utils.timeouts import (
     MQTT_RECONNECT_MIN,
     HTTP_TORADIO_TIMEOUT,
 )
+
+# Maximum inbound MQTT payload size (bytes) to prevent OOM from malicious broker
+MQTT_MAX_PAYLOAD_SIZE = 4096
+
+# Regex for validating MQTT topic components (no control chars, no null bytes)
+_TOPIC_SAFE_RE = re.compile(r'^[a-zA-Z0-9/_\-\.]+$')
 
 log = logging.getLogger("mqtt_bridge")
 
@@ -88,7 +107,8 @@ class MqttBridge:
         try:
             import RNS
             self.mode = RNS.Interfaces.Interface.MODE_ACCESS_POINT
-        except BaseException:  # RNS may crash (PanicException) or be missing
+        except Exception:
+            log.debug("[%s] RNS not available for mode detection, using default", name)
             self.mode = 1
 
         # --- MQTT CONFIG ---
@@ -97,13 +117,44 @@ class MqttBridge:
         self._topic_root = cfg.get("mqtt_topic_root", "msh")
         self._region = cfg.get("mqtt_region", "US")
         http_api_port = cfg.get("http_api_port", 9443)
-        self._http_api_url = (
-            cfg.get("http_api_url")
-            or f"http://localhost:{http_api_port}/api/v1/toradio"
+
+        # MQTT authentication — config or environment variables
+        self._mqtt_username = (
+            cfg.get("mqtt_username")
+            or os.environ.get("GATEWAY_MQTT_USERNAME")
+        )
+        self._mqtt_password = (
+            cfg.get("mqtt_password")
+            or os.environ.get("GATEWAY_MQTT_PASSWORD")
+        )
+        self._mqtt_tls = cfg.get("mqtt_tls", False)
+
+        # Warn if connecting to non-localhost without TLS
+        if self._mqtt_host not in ("localhost", "127.0.0.1", "::1"):
+            if not self._mqtt_tls:
+                log.warning(
+                    "[%s] MQTT broker %s is not localhost but TLS is disabled. "
+                    "Set gateway.mqtt_tls=true for encrypted connections.",
+                    self.name, self._mqtt_host,
+                )
+            if not self._mqtt_username:
+                log.warning(
+                    "[%s] MQTT broker %s has no authentication configured. "
+                    "Set gateway.mqtt_username/mqtt_password or "
+                    "GATEWAY_MQTT_USERNAME/GATEWAY_MQTT_PASSWORD env vars.",
+                    self.name, self._mqtt_host,
+                )
+
+        # Validate and build HTTP API URL (SSRF prevention)
+        self._http_api_url = self._validate_http_api_url(
+            cfg.get("http_api_url"),
+            http_api_port,
         )
 
-        # Build subscribe topic: msh/{region}/2/json/#
-        self._subscribe_topic = f"{self._topic_root}/{self._region}/2/json/#"
+        # Validate and build subscribe topic (topic injection prevention)
+        self._subscribe_topic = self._build_subscribe_topic(
+            self._topic_root, self._region,
+        )
 
         # --- RELIABILITY ---
         self._bridge_health = bridge_health
@@ -153,10 +204,74 @@ class MqttBridge:
                   self.name, msg_id[:8] if msg_id else "?",
                   old_status, new_status)
 
+    # ── Validation Helpers ──────────────────────────────────────
+
+    @staticmethod
+    def _validate_http_api_url(
+        custom_url: Optional[str],
+        default_port: int,
+    ) -> str:
+        """Validate HTTP API URL to prevent SSRF.
+
+        Only allows http:// scheme to localhost or explicit config values.
+        Rejects file://, ftp://, and other dangerous schemes.
+        """
+        if custom_url:
+            try:
+                parsed = urlparse(custom_url)
+                if parsed.scheme not in ("http", "https"):
+                    log.error(
+                        "http_api_url scheme %r not allowed (only http/https). "
+                        "Falling back to localhost.",
+                        parsed.scheme,
+                    )
+                    return f"http://localhost:{default_port}/api/v1/toradio"
+                if not parsed.hostname:
+                    log.error(
+                        "http_api_url has no hostname. Falling back to localhost."
+                    )
+                    return f"http://localhost:{default_port}/api/v1/toradio"
+                # Reject URLs with embedded credentials
+                if parsed.username or parsed.password:
+                    log.warning(
+                        "http_api_url contains embedded credentials — "
+                        "stripping them for safety."
+                    )
+                    clean = parsed._replace(
+                        netloc=f"{parsed.hostname}:{parsed.port or default_port}"
+                    )
+                    return clean.geturl()
+                return custom_url
+            except ValueError:
+                log.error("Invalid http_api_url. Falling back to localhost.")
+                return f"http://localhost:{default_port}/api/v1/toradio"
+        return f"http://localhost:{default_port}/api/v1/toradio"
+
+    @staticmethod
+    def _build_subscribe_topic(topic_root: str, region: str) -> str:
+        """Build and validate the MQTT subscribe topic.
+
+        Prevents topic injection via control characters or wildcards
+        in the root/region components.
+        """
+        for label, value in [("mqtt_topic_root", topic_root),
+                             ("mqtt_region", region)]:
+            if not value or not isinstance(value, str):
+                log.error("Invalid %s: must be a non-empty string", label)
+                raise ValueError(f"Invalid {label}")
+            if not _TOPIC_SAFE_RE.match(value):
+                log.error(
+                    "Invalid %s %r — contains unsafe characters. "
+                    "Only alphanumeric, /, _, -, . allowed.",
+                    label, value,
+                )
+                raise ValueError(f"Invalid {label}: {value!r}")
+        return f"{topic_root}/{region}/2/json/#"
+
     # ── MQTT Connection ──────────────────────────────────────────
 
     def _connect_mqtt(self) -> None:
-        """Initialize and connect the MQTT client."""
+        """Initialize and connect the MQTT client with optional TLS/auth."""
         try:
             self._mqtt_client = mqtt.Client(
                 callback_api_version=mqtt.CallbackAPIVersion.VERSION2,
@@ -169,6 +284,23 @@ class MqttBridge:
                 max_delay=int(MQTT_RECONNECT_MAX),
             )
 
+            # TLS configuration
+            if self._mqtt_tls:
+                self._mqtt_client.tls_set(
+                    cert_reqs=ssl.CERT_REQUIRED,
+                    tls_version=ssl.PROTOCOL_TLS_CLIENT,
+                )
+                log.info("[%s] MQTT TLS enabled", self.name)
+
+            # Authentication
+            if self._mqtt_username:
+                self._mqtt_client.username_pw_set(
+                    self._mqtt_username,
+                    self._mqtt_password,
+                )
+                log.info("[%s] MQTT authentication configured (user=%s)",
+                         self.name, self._mqtt_username)
+
             log.info("[%s] Connecting to MQTT broker %s:%s...",
                      self.name, self._mqtt_host, self._mqtt_port)
             self._mqtt_client.connect(
@@ -177,7 +309,7 @@ class MqttBridge:
                 keepalive=MQTT_KEEPALIVE,
             )
             self._mqtt_client.loop_start()
-        except (OSError, ConnectionError, ValueError) as e:
+        except (OSError, ConnectionError, ValueError, ssl.SSLError) as e:
             log.error("[%s] MQTT connection error: %s", self.name, e)
             if self._bridge_health:
                 self._bridge_health.record_connection_event(
@@ -197,8 +329,8 @@ class MqttBridge:
             try:
                 from src.utils.event_bus import emit_service_status
                 emit_service_status("meshtastic", True, "MQTT connected")
-            except Exception:  # noqa: S110
-                pass
+            except (ImportError, AttributeError):
+                pass  # Event bus is optional
         else:
             log.error("[%s] MQTT connect failed (rc=%s)", self.name, rc)
             self.online = False
@@ -216,16 +348,29 @@ class MqttBridge:
         try:
             from src.utils.event_bus import emit_service_status
             emit_service_status("meshtastic", False, "MQTT disconnected")
-        except Exception:  # noqa: S110
-            pass
+        except (ImportError, AttributeError):
+            pass  # Event bus is optional
 
     # ── RX Path (MQTT → RNS) ─────────────────────────────────────
 
     def _on_message(self, client, userdata, msg):
         """MQTT message callback — parse JSON, pass to RNS."""
         try:
+            # Guard against oversized payloads (OOM prevention)
+            if len(msg.payload) > MQTT_MAX_PAYLOAD_SIZE:
+                log.warning(
+                    "[%s] MQTT payload %d bytes exceeds limit (%d) — dropped",
+                    self.name, len(msg.payload), MQTT_MAX_PAYLOAD_SIZE,
+                )
+                return
+
             payload_str = msg.payload.decode("utf-8", errors="replace")
             data = json.loads(payload_str)
+
+            if not isinstance(data, dict):
+                log.warning("[%s] MQTT RX: expected JSON object, got %s",
+                            self.name, type(data).__name__)
+                return
 
             # Deduplication by message ID
             msg_id = str(data.get("id", ""))
@@ -255,19 +400,26 @@ class MqttBridge:
             if self._bridge_health:
                 self._bridge_health.record_message_sent("mesh_to_rns")
 
-            # Event bus notification
+            # Event bus notification (strip raw_data to safe fields only)
             try:
                 from src.utils.event_bus import emit_message
                 node_id = data.get("from", data.get("sender", ""))
+                # Only forward safe metadata fields — not the full MQTT payload
+                safe_metadata = {
+                    k: data[k] for k in (
+                        "id", "from", "to", "channel", "type",
+                        "snr", "rssi", "hopStart", "hopLimit", "fromName",
+                    ) if k in data
+                }
                 emit_message(
                     direction="rx",
                     content=repr(raw_bytes[:32]),
                     node_id=str(node_id),
                     network="meshtastic",
-                    raw_data=data,
+                    raw_data=safe_metadata,
                 )
-            except Exception:  # noqa: S110
-                pass
+            except (ImportError, AttributeError):
+                pass  # Event bus is optional
 
             if self._circuit_breaker:
                 self._circuit_breaker.record_success()
@@ -277,7 +429,7 @@ class MqttBridge:
 
         except json.JSONDecodeError as e:
             log.warning("[%s] MQTT RX: invalid JSON: %s", self.name, e)
-        except (KeyError, TypeError, ValueError) as e:
+        except (KeyError, TypeError, ValueError, binascii.Error) as e:
             log.warning("[%s] MQTT RX error (packet dropped): %s", self.name, e)
 
     # ── TX Path (RNS → Mesh via HTTP) ────────────────────────────
@@ -317,8 +469,8 @@ class MqttBridge:
                     content=repr(data[:32]),
                     network="meshtastic",
                 )
-            except Exception:  # noqa: S110
-                pass
+            except (ImportError, AttributeError):
+                pass  # Event bus is optional
 
         except (urllib.error.URLError, OSError, ValueError) as e:
             self.tx_errors += 1

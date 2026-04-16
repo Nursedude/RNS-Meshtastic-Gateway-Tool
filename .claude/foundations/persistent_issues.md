@@ -1,7 +1,7 @@
 # RNS-Meshtastic Gateway Tool: Persistent Issues & Session Memory
 
 > **Purpose**: Durable context for Claude Code sessions. Read this first.
-> **Last updated**: 2026-04-16 (after tracker security follow-ups branch)
+> **Last updated**: 2026-04-16 (after PR #36 merged — final tracker review findings)
 
 ---
 
@@ -106,6 +106,32 @@ would propagate and drop a packet. `except Exception` still lets
 `SystemExit`/`KeyboardInterrupt` through (they're `BaseException` subclasses),
 and the explicit `log.debug` avoids the silent-swallow anti-pattern.
 
+### 12. RNS PanicException is BaseException — catch by name, re-raise rest
+`import RNS` can raise `RNS.PanicException` (a `BaseException` subclass in
+some versions). `MqttBridge.__init__` mode detection has a two-tier catch:
+`except Exception` for normal failures, then `except BaseException` that
+matches `type(e).__name__ in ("PanicException", "SystemPanicException")` and
+re-raises everything else so `KeyboardInterrupt` / `SystemExit` still
+propagate. Match-by-name is fragile if RNS renames the class — guarded by
+`tests/test_mqtt_bridge.py::TestRnsPanicResilience`.
+
+### 13. SSRF blocklist for HTTP fetcher
+`MqttBridge._validate_http_api_url` rejects cloud-metadata endpoints via
+`_BLOCKED_METADATA_HOSTS` / `_BLOCKED_METADATA_IPS` /
+`_BLOCKED_METADATA_NETWORKS` (169.254.169.254, fd00:ec2::254,
+100.100.100.200, link-local 169.254.0.0/16 and fe80::/10,
+metadata.google.internal et al.). Any new HTTP fetcher in the codebase MUST
+route through `_is_blocked_metadata_host` or an equivalent check.
+Limitation: pre-resolution check only — does not catch DNS rebinding to a
+blocked IP.
+
+### 14. Flask `/api/*` endpoints carry `@rate_limited()`
+Per-IP, per-route fixed-window limit (60 req / 60 s default) in
+`src/monitoring/web_dashboard.py`. Returns 429 + `Retry-After`. New API
+routes must wear the decorator. The limiter is in-memory and per-process —
+multi-worker deployments would bypass it, but the dashboard is single-process
+by design (binds 127.0.0.1).
+
 ---
 
 ## Known Gotchas
@@ -155,10 +181,14 @@ Dashboard binds to `127.0.0.1` by default — warn loudly if overridden to `0.0.
 
 ## Test Suite
 
-- **506 tests** across 23 test files (as of 2026-04-16, after PR #34)
+- **533 tests** across 23 test files (as of 2026-04-16, after PR #36)
 - Run: `python -m pytest tests/ -v --timeout=30`
 - All tests must pass before committing
 - Flask dashboard tests require `flask` to be installed (skip gracefully if missing)
+- New coverage in PR #36: `TestDeliveryTracker::test_register_ids_are_unique_at_scale`,
+  `TestMqttDedup::{test_cleanup_keeps_fresh_entries, test_hard_cap_trims_when_exceeded}`,
+  `TestRnsPanicResilience`, `TestHttpApiUrlSsrf`,
+  `TestApiRateLimiting`, `test_journal_mode_is_wal`.
 
 ### Singleton test hygiene
 
@@ -187,7 +217,7 @@ These patterns were ported from MeshForge and should be maintained:
 
 ---
 
-## Recent Review Cycle (PRs #27-#34)
+## Recent Review Cycle (PRs #27-#36)
 
 Delivered between 2026-04-16 in a single review-and-followup session:
 
@@ -201,35 +231,46 @@ Delivered between 2026-04-16 in a single review-and-followup session:
 | #32 | Review follow-ups: singleton wiring, stats clock, CI fork guard | 7cbabc0 |
 | #33 | Snapshot persistence for dashboard ↔ daemon state | b8ba288 |
 | #34 | Event-bus resilience + per-service zero-traffic detection | bf7dda7 |
+| #35 | Memory: post-#34 session notes | aeda848 |
+| #36 | Tracker security findings: DeliveryTracker UUID, dedup cap, SSRF blocklist, PanicException, Flask rate-limit, WAL test | ba6a58e |
 
 ---
 
-## Outstanding Review Findings (not yet fixed)
+## Outstanding Review Findings
 
-Items from the PR #27-#31 security review that remain open. PR #32/#34 cleared
-the biggest correctness / resilience concerns (singleton, stats clock, CI
-fork, event-bus `except`, zero-traffic per-service). The
-`claude/fix-tracker-security-issues-BHt9w` branch closes the rest:
+All items from the PR #27-#31 security review are now closed. PR #36 was
+the final security follow-up; what shipped:
 
-- DeliveryTracker IDs widened to full 128-bit UUID hex.
-- MQTT `_seen_ids` cleanup verified + hard cap (`MQTT_DEDUP_MAX_ENTRIES`)
-  added; tested in `tests/test_mqtt_bridge.py::TestMqttDedup`.
-- SSRF blocklist for cloud-metadata hosts/IPs (169.254.169.254,
-  metadata.google.internal, fd00:ec2::254, 100.100.100.200, link-local
-  ranges) added to `_validate_http_api_url`.
-- RNS `PanicException` (BaseException subclass) at import time is now
-  caught by name with a `BaseException` re-raise for `KeyboardInterrupt` /
-  `SystemExit`.
-- Flask `/api/*` endpoints have a per-IP, per-route fixed-window rate
-  limit (`rate_limited` decorator).
-- SQLite `journal_mode=WAL` was already enabled at first commit; the
-  branch adds a regression test (`test_journal_mode_is_wal`).
+- DeliveryTracker IDs widened to full 128-bit UUID hex
+  (`src/utils/bridge_health.py:DeliveryTracker.register`).
+- MQTT `_seen_ids` cleanup verified + hard cap
+  (`MQTT_DEDUP_MAX_ENTRIES = 10_000` in `src/utils/timeouts.py`); newest-half
+  retention if a flood outpaces the time-window purge.
+- SSRF blocklist for cloud-metadata hosts/IPs in
+  `MqttBridge._is_blocked_metadata_host` (see Critical Rule #13).
+- RNS `PanicException` defensive catch (see Critical Rule #12).
+- Flask `/api/*` endpoints carry `@rate_limited()` (see Critical Rule #14).
+- SQLite `journal_mode=WAL` regression test
+  (`tests/test_message_queue.py::test_journal_mode_is_wal`).
 
-### CI / tooling
+### Watch-list (not blockers)
 
+- **SSRF blocklist is pre-resolution only.** A hostname that resolves to a
+  blocked IP would still reach it. Acceptable today because the URL comes
+  from a local config file. If we ever accept user-supplied URLs at runtime,
+  add a post-resolution check.
+- **PanicException catch matches by class name string.** If RNS renames
+  `PanicException`, the import-time crash returns. Regression-tested but the
+  test would also need updating.
+- **Rate limiter is single-process.** Fine while the dashboard runs on
+  Flask's threaded server bound to localhost. Move to a shared store
+  (Redis / SQLite) before fronting it with Gunicorn workers or a reverse
+  proxy that load-balances multiple processes.
+- **`MQTT_DEDUP_MAX_ENTRIES` is hardcoded.** Make it config-driven only if a
+  noisy broker legitimately needs more than 10k unique IDs per minute.
 - **Pre-existing unused imports.** `threading`, `pytest` in
   `tests/test_health_probe.py`; `signal` in `tests/test_launcher.py`.
-  Safe to remove but outside the current review scope.
+  Safe to remove but no behavioural impact.
 
 ---
 
@@ -250,3 +291,6 @@ Before committing, verify:
 - [ ] Stats/API timestamps are wall-clock (`time.time()`), not `time.monotonic()`
 - [ ] Event-bus emits use `except Exception as e: log.debug(...)` (never a narrow tuple)
 - [ ] CI steps that post PR comments check for fork PRs + wrap in try/catch
+- [ ] New HTTP fetchers route through `_is_blocked_metadata_host` (or equivalent SSRF check)
+- [ ] New Flask `/api/*` routes carry `@rate_limited()`
+- [ ] Tracker / dedup IDs use full UUIDs, not truncated hex

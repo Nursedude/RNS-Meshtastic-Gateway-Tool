@@ -28,6 +28,9 @@ jobs:
     name: Test Suite
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: write
     strategy:
       fail-fast: false
       matrix:
@@ -47,9 +50,67 @@ jobs:
           pip install -r requirements-dev.txt
 
       - name: Run tests with coverage
-        run: pytest tests/ -v --tb=short --timeout=30 -x --cov=src --cov-report=term-missing
+        id: pytest
+        run: |
+          set -o pipefail
+          pytest tests/ -v --tb=short --timeout=30 -x --cov=src --cov-report=term-missing 2>&1 | tee /tmp/pytest.log
         env:
           CI: true
+
+      - name: Upload pytest log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-log-py${{ matrix.python-version }}
+          path: /tmp/pytest.log
+          if-no-files-found: ignore
+
+      - name: Post pytest failure summary to PR
+        if: failure() && github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const path = '/tmp/pytest.log';
+            if (!fs.existsSync(path)) {
+              core.warning('pytest log not found at ' + path);
+              return;
+            }
+            const log = fs.readFileSync(path, 'utf8');
+            const lines = log.split('\n');
+            const failureIdx = lines.findIndex(l => /=+ FAILURES =+/.test(l));
+            const summaryIdx = lines.findIndex(l => /=+ short test summary info =+/.test(l));
+            let excerpt;
+            if (summaryIdx !== -1) {
+              excerpt = lines.slice(summaryIdx).join('\n');
+            } else if (failureIdx !== -1) {
+              excerpt = lines.slice(failureIdx).join('\n');
+            } else {
+              excerpt = lines.slice(-120).join('\n');
+            }
+            const maxLen = 60000;
+            if (excerpt.length > maxLen) {
+              excerpt = excerpt.slice(-maxLen);
+            }
+            const body = [
+              '### pytest failure (Python ${{ matrix.python-version }})',
+              '',
+              'Job: `${{ github.job }}` — run [#${{ github.run_number }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})',
+              '',
+              '<details><summary>pytest summary</summary>',
+              '',
+              '```',
+              excerpt,
+              '```',
+              '',
+              '</details>',
+            ].join('\n');
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body,
+            });
 
   syntax-check:
     name: Syntax Check

@@ -53,7 +53,7 @@ jobs:
         id: pytest
         run: |
           set -o pipefail
-          pytest tests/ -v --tb=short --timeout=30 -x --cov=src --cov-report=term-missing 2>&1 | tee /tmp/pytest.log
+          pytest tests/ -v --tb=short --timeout=30 --cov=src --cov-report=term-missing 2>&1 | tee /tmp/pytest.log
         env:
           CI: true
 
